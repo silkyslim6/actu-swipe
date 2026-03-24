@@ -134,21 +134,20 @@ const THEMES = {
   tech:     {label:'Tech',     bg:'var(--tec-bg)',text:'var(--tec-t)'},
 };
 const QUERIES = {
-  politique:['politique France 2026','elections municipales France 2026','Marine Le Pen 2026','gouvernement Lecornu 2026','presidentielle 2027'],
+  politique:['politique France 2026','elections municipales France 2026','presidentielle 2027','gouvernement Lecornu 2026','Marine Le Pen 2026'],
   economie: ['economie France 2026','droits douane Trump 2026','CAC40 bourse mars 2026','inflation France 2026','budget deficit France 2026'],
-  sport:    ['JO Milan Cortina 2026 France medailles','foot coupe monde 2026','Roland Garros 2026','rugby France XV 2026','athletisme France 2026'],
-  cinema:   ['Oscars 2026 ceremonie','cinema France mars 2026','Cannes 2026','Cesar 2026','film francais box office 2026'],
-  culture:  ['culture France actualite 2026','exposition Paris 2026','livre roman francais 2026','musique France 2026','patrimoine France 2026'],
-  tech:     ['intelligence artificielle actualite 2026','Mistral AI actualite','DeepSeek IA 2026','cybersecurite France 2026','startups tech France 2026'],
+  sport:    ['JO Milan Cortina 2026 France','foot coupe monde 2026','Roland Garros 2026','rugby France XV 2026','athletisme France 2026'],
+  cinema:   ['Oscars 2026 ceremonie','cinema France mars 2026','Cannes 2026','Cesar 2026','film francais 2026'],
+  culture:  ['culture France 2026','exposition Paris 2026','livre francais 2026','musique France 2026','patrimoine France 2026'],
+  tech:     ['IA actualite 2026','Mistral AI 2026','DeepSeek 2026','cybersecurite France 2026','startups tech France 2026'],
 };
 
 let activeThemes = new Set(Object.keys(THEMES));
 let activeGeo    = new Set(['fr','world']);
-
-let deckEls   = [];   // [bottom, ..., top] — top is what user sees
+let deckEls   = [];
 let seenCount = 0;
-let sessionId = 0;    // incremented on shuffle to cancel stale fetches
-let nextCard  = null; // prefetched card data ready to show instantly
+let sessionId = 0;
+let nextCard  = null;
 let fetching  = false;
 
 function rnd(a){ return a[Math.floor(Math.random()*a.length)]; }
@@ -162,9 +161,8 @@ function showToast(msg){
 }
 
 function updateCounter(){
-  const ready = nextCard ? 1 : 0;
   document.getElementById('counter').textContent =
-    'Carte '+(seenCount+1)+(ready ? ' · ✔ suivante prête' : ' · chargement…');
+    'Carte '+(seenCount+1)+(nextCard?' · suivante prete':' · chargement suivante...');
 }
 
 function sanitize(html){
@@ -173,9 +171,10 @@ function sanitize(html){
     .replace(/<b>(.*?)<\/b>/gi,'<strong>$1</strong>');
 }
 
+// Fetch via /api/messages (with web search, for subsequent cards)
 async function fetchCard(sid){
-  if(sid !== sessionId) return;
-  fetching = true;
+  if(sid!==sessionId||fetching) return;
+  fetching=true;
   const theme=randTheme(), geo=randGeo();
   const q=rnd(QUERIES[theme]||QUERIES.politique);
   const geoStr=geo==='fr'?'France':'international';
@@ -184,8 +183,8 @@ async function fetchCard(sid){
     'Reponds UNIQUEMENT avec un objet JSON valide sur une seule ligne, sans markdown, sans backtick, sans texte autour.',
     'Format: {"date":"JJ mois AAAA","title":"titre max 10 mots","body":"2-3 phrases. Noms propres entre balises strong.","source":"nom media","geo":"'+geo+'","theme":"'+theme+'"}'
   ].join(' ');
-  try {
-    const resp = await fetch('/api/messages',{
+  try{
+    const resp=await fetch('/api/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -195,34 +194,37 @@ async function fetchCard(sid){
         messages:[{role:'user',content:'Actualite '+THEMES[theme].label+' en '+geoStr+': '+q}]
       })
     });
-    if(sid !== sessionId){ fetching=false; return; }
-    if(resp.status===429){ fetching=false; setTimeout(()=>fetchCard(sid),6000); return; }
-    if(!resp.ok){ fetching=false; setTimeout(()=>fetchCard(sid),3000); return; }
-    const data = await resp.json();
-    if(sid !== sessionId){ fetching=false; return; }
-    // take last text block (web_search returns: reflection -> tool_use -> tool_result -> JSON)
+    if(sid!==sessionId){fetching=false;return;}
+    if(resp.status===429){fetching=false;setTimeout(()=>fetchCard(sid),8000);return;}
+    if(!resp.ok){fetching=false;setTimeout(()=>fetchCard(sid),4000);return;}
+    const data=await resp.json();
+    if(sid!==sessionId){fetching=false;return;}
     let txt='';
     for(const b of (data.content||[])) if(b.type==='text'&&b.text) txt=b.text.trim();
-    if(!txt){ fetching=false; setTimeout(()=>fetchCard(sid),2000); return; }
+    if(!txt){fetching=false;setTimeout(()=>fetchCard(sid),3000);return;}
     const clean=txt.replace(/^```[a-z]*\n?/,'').replace(/\n?```$/,'').trim();
     const card=JSON.parse(clean);
     card.theme=card.theme||theme; card.geo=card.geo||geo;
     card.body=sanitize(card.body);
     fetching=false;
-    nextCard=card;
-    updateCounter();
-    // if a shimmer is on top, replace it immediately
-    tryReplaceTopShimmer();
-  } catch(e){
+    gotCard(card,sid);
+  }catch(e){
     fetching=false;
-    if(sid===sessionId) setTimeout(()=>fetchCard(sid),3000);
+    if(sid===sessionId) setTimeout(()=>fetchCard(sid),4000);
   }
+}
+
+function gotCard(card,sid){
+  if(sid!==sessionId) return;
+  nextCard=card;
+  updateCounter();
+  tryReplaceTopShimmer();
 }
 
 function tryReplaceTopShimmer(){
   if(!nextCard) return;
   const top=deckEls[deckEls.length-1];
-  if(!top || !top.dataset.shimmer) return;
+  if(!top||!top.dataset.shimmer) return;
   const card=nextCard; nextCard=null;
   const el=makeCardEl(card);
   el.style.zIndex=top.style.zIndex;
@@ -256,15 +258,13 @@ function makeCardEl(data){
 function makeShimmerEl(){
   const th=THEMES[randTheme()];
   const geo=randGeo();
-  const gDot=geo==='fr'?'#0033a0':'#b5461b';
-  const gLabel=geo==='fr'?'France':'Monde';
   const el=document.createElement('div');
   el.className='card loading-card';
   el.dataset.shimmer='1';
   el.innerHTML=
     '<div class="card-meta">'+
       '<div class="card-pill" style="background:'+th.bg+';color:'+th.text+'">'+th.label+'</div>'+
-      '<div class="card-geo"><div class="geo-dot" style="background:'+gDot+'"></div>'+gLabel+'</div>'+
+      '<div class="card-geo"><div class="geo-dot" style="background:'+(geo==='fr'?'#0033a0':'#b5461b')+'"></div>'+(geo==='fr'?'France':'Monde')+'</div>'+
     '</div>'+
     '<div class="loading-shimmer">'+
       '<div class="shimmer-title"></div>'+
@@ -281,9 +281,9 @@ function rebuildStack(){
   const n=deckEls.length;
   deckEls.forEach((c,i)=>{
     c.classList.remove('behind1','behind2');
-    const fromTop=n-1-i;
-    if(fromTop===1) c.classList.add('behind1');
-    else if(fromTop>=2) c.classList.add('behind2');
+    const d=n-1-i;
+    if(d===1) c.classList.add('behind1');
+    else if(d>=2) c.classList.add('behind2');
     c.style.zIndex=String(i+1);
   });
 }
@@ -295,19 +295,15 @@ function addToDeck(el){
 }
 
 function pushNext(){
-  // push next card (from prefetch) or shimmer
-  const sid=sessionId;
   if(nextCard){
     const card=nextCard; nextCard=null;
     addToDeck(makeCardEl(card));
     updateCounter();
-    // prefetch another one for after next swipe
-    if(!fetching) setTimeout(()=>fetchCard(sid),200);
+    if(!fetching) setTimeout(()=>fetchCard(sessionId),300);
   } else {
-    // no prefetched card yet — show shimmer, fetch will replace it
     addToDeck(makeShimmerEl());
     updateCounter();
-    if(!fetching) fetchCard(sid);
+    if(!fetching) fetchCard(sessionId);
   }
 }
 
@@ -315,51 +311,44 @@ function dismissTop(dir){
   if(deckEls.length===0) return;
   const top=deckEls[deckEls.length-1];
   if(top.dataset.shimmer==='1') return;
-
   top.style.transition='transform .30s cubic-bezier(.4,0,.2,1),opacity .25s';
   top.style.transform='translateX('+(dir==='right'?'150%':'-150%')+') rotate('+(dir==='right'?'20':'-20')+'deg)';
   top.style.opacity='0';
-
   deckEls.splice(deckEls.length-1,1);
   seenCount++;
   rebuildStack();
-  setTimeout(()=>{ if(top.parentNode) top.remove(); },320);
-
-  // push the prefetched card (or shimmer) onto deck
+  setTimeout(()=>{if(top.parentNode)top.remove();},320);
   pushNext();
-  // immediately start fetching the one after
-  if(!fetching) setTimeout(()=>fetchCard(sessionId),200);
 }
 
 function attachSwipe(el){
   let sx,sy,dx=0,active=false;
   const hl=el.querySelector('.hint-like');
   const hn=el.querySelector('.hint-nope');
-  function onStart(x,y){ sx=x;sy=y;dx=0;active=true;el.style.transition='none'; }
+  function onStart(x,y){sx=x;sy=y;dx=0;active=true;el.style.transition='none';}
   function onMove(x,y){
     if(!active) return;
     const ddx=x-sx,ddy=y-sy;
-    if(Math.abs(ddy)>Math.abs(ddx)+14){ active=false; return; }
+    if(Math.abs(ddy)>Math.abs(ddx)+14){active=false;return;}
     dx=ddx;
     el.style.transform='translateX('+dx+'px) rotate('+(dx*0.055)+'deg)';
     const r=Math.min(Math.abs(dx)/75,1);
-    if(hl) hl.style.opacity=String(dx>0?r:0);
-    if(hn) hn.style.opacity=String(dx<0?r:0);
+    if(hl)hl.style.opacity=String(dx>0?r:0);
+    if(hn)hn.style.opacity=String(dx<0?r:0);
   }
   function onEnd(){
     if(!active) return; active=false;
-    if(hl) hl.style.opacity='0';
-    if(hn) hn.style.opacity='0';
+    if(hl)hl.style.opacity='0'; if(hn)hn.style.opacity='0';
     window.removeEventListener('mousemove',mmH);
     window.removeEventListener('mouseup',muH);
     if(Math.abs(dx)>75) dismissTop(dx>0?'right':'left');
-    else{ el.style.transition='transform .28s cubic-bezier(.4,0,.2,1)'; el.style.transform=''; }
+    else{el.style.transition='transform .28s cubic-bezier(.4,0,.2,1)';el.style.transform='';}
   }
-  function mmH(e){ onMove(e.clientX,e.clientY); }
-  function muH(){ onEnd(); }
-  el.addEventListener('mousedown',e=>{ onStart(e.clientX,e.clientY); window.addEventListener('mousemove',mmH); window.addEventListener('mouseup',muH); });
-  el.addEventListener('touchstart',e=>{ const t=e.touches[0]; onStart(t.clientX,t.clientY); },{passive:true});
-  el.addEventListener('touchmove',e=>{ const t=e.touches[0]; onMove(t.clientX,t.clientY); },{passive:true});
+  function mmH(e){onMove(e.clientX,e.clientY);}
+  function muH(){onEnd();}
+  el.addEventListener('mousedown',e=>{onStart(e.clientX,e.clientY);window.addEventListener('mousemove',mmH);window.addEventListener('mouseup',muH);});
+  el.addEventListener('touchstart',e=>{const t=e.touches[0];onStart(t.clientX,t.clientY);},{passive:true});
+  el.addEventListener('touchmove',e=>{const t=e.touches[0];onMove(t.clientX,t.clientY);},{passive:true});
   el.addEventListener('touchend',onEnd);
 }
 
@@ -376,7 +365,7 @@ function buildFilters(){
     c.className='chip'+(on?'':' off');
     c.style.cssText=on?'background:'+bgOn+';color:'+txOn+';border-color:'+bgOn:'background:transparent;color:var(--muted);border-color:var(--border)';
     c.innerHTML='<span class="chip-dot" style="background:'+dot+'"></span>'+label;
-    c.onclick=()=>{ if(activeGeo.has(geo)){if(activeGeo.size>1)activeGeo.delete(geo);}else activeGeo.add(geo); buildFilters(); };
+    c.onclick=()=>{if(activeGeo.has(geo)){if(activeGeo.size>1)activeGeo.delete(geo);}else activeGeo.add(geo);buildFilters();};
     wrap.appendChild(c);
   });
   Object.entries(THEMES).forEach(([key,th])=>{
@@ -385,7 +374,7 @@ function buildFilters(){
     c.className='chip'+(on?'':' off');
     c.style.cssText=on?'background:'+th.bg+';color:'+th.text+';border-color:'+th.bg:'background:transparent;color:var(--muted);border-color:var(--border)';
     c.textContent=th.label;
-    c.onclick=()=>{ if(activeThemes.has(key)){if(activeThemes.size>1)activeThemes.delete(key);}else activeThemes.add(key); buildFilters(); };
+    c.onclick=()=>{if(activeThemes.has(key)){if(activeThemes.size>1)activeThemes.delete(key);}else activeThemes.add(key);buildFilters();};
     wrap.appendChild(c);
   });
 }
@@ -393,10 +382,9 @@ function buildFilters(){
 document.getElementById('btn-skip').onclick=()=>dismissTop('left');
 document.getElementById('btn-next').onclick=()=>dismissTop('right');
 document.getElementById('btn-shuffle').onclick=()=>{
-  sessionId++; nextCard=null; fetching=false;
-  document.getElementById('deck').innerHTML=''; deckEls=[]; seenCount=0;
+  sessionId++;nextCard=null;fetching=false;
+  document.getElementById('deck').innerHTML='';deckEls=[];seenCount=0;
   showToast('Nouvelles actus...');
-  // show shimmer immediately, fetch right away
   addToDeck(makeShimmerEl());
   updateCounter();
   fetchCard(sessionId);
@@ -404,13 +392,24 @@ document.getElementById('btn-shuffle').onclick=()=>{
 
 buildFilters();
 
-// 1. Show shimmer immediately
+// Show shimmer immediately
 addToDeck(makeShimmerEl());
 updateCounter();
-// 2. Fetch card 1 right away
-fetchCard(sessionId);
-// 3. Fetch card 2 (prefetch) 200ms later
-setTimeout(()=>{ if(!nextCard && !fetching) fetchCard(sessionId); }, 200);
+
+// Fetch first card from /api/firstcard (pre-fetched at page load by Vercel edge)
+fetch('/api/firstcard')
+  .then(r=>r.json())
+  .then(card=>{
+    if(card.error) throw new Error(card.error);
+    card.body=sanitize(card.body||'');
+    gotCard(card,sessionId);
+    // Start prefetching card 2 right away
+    setTimeout(()=>fetchCard(sessionId),300);
+  })
+  .catch(()=>{
+    // Fallback to regular fetch
+    fetchCard(sessionId);
+  });
 </script>
 </body>
 </html>

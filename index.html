@@ -204,9 +204,11 @@ async function fetchOneCard(sid){
   }
   if(!resp.ok) throw new Error('http'+resp.status);
   const data=await resp.json();
+  // With web_search, Claude returns: text? -> tool_use -> tool_result -> text(JSON)
+  // We need the LAST text block, not the first
   let txt='';
   for(const b of (data.content||[]))
-    if(b.type==='text'&&b.text){txt=b.text.trim();break;}
+    if(b.type==='text'&&b.text) txt=b.text.trim();
   if(!txt) throw new Error('empty');
   // strip any accidental code fences
   const clean=txt.replace(/^```[a-z]*\n?/,'').replace(/\n?```$/,'').trim();

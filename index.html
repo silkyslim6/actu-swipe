@@ -135,11 +135,11 @@ const THEMES = {
 };
 const QUERIES = {
   politique:['politique France 2026','elections municipales France 2026','Marine Le Pen 2026','gouvernement Lecornu 2026','presidentielle 2027'],
-  economie: ['economie France 2026','droits douane Trump 2026','CAC40 bourse mars 2026','inflation prix France 2026','budget France 2026'],
-  sport:    ['JO Milan Cortina 2026 France','foot coupe monde 2026','Roland Garros tennis 2026','rugby France 2026','athletisme France 2026'],
-  cinema:   ['Oscars 2026 gagnants','cinema France mars 2026','Cannes 2026','Cesar 2026','films sortie France 2026'],
-  culture:  ['culture France 2026','expo Paris 2026','livre francais 2026','musique France 2026','patrimoine France 2026'],
-  tech:     ['IA actualite 2026','Mistral AI 2026','DeepSeek 2026','cybersecurite France 2026','startups tech France 2026'],
+  economie: ['economie France 2026','droits douane Trump 2026','CAC40 bourse mars 2026','inflation France 2026','budget deficit France 2026'],
+  sport:    ['JO Milan Cortina 2026 France medailles','foot coupe monde 2026','Roland Garros 2026','rugby France XV 2026','athletisme France 2026'],
+  cinema:   ['Oscars 2026 ceremonie','cinema France mars 2026','Cannes 2026 selection','Cesar 2026','film francais box office 2026'],
+  culture:  ['culture France actualite 2026','exposition Paris 2026','livre roman francais 2026','musique France 2026','patrimoine France 2026'],
+  tech:     ['intelligence artificielle actualite 2026','Mistral AI actualite','DeepSeek IA 2026','cybersecurite France 2026','startups tech France 2026'],
 };
 
 let activeThemes = new Set(Object.keys(THEMES));
@@ -148,11 +148,11 @@ let activeGeo    = new Set(['fr','world']);
 const BUFFER_TARGET = 10;
 const REFILL_AT     = 3;
 
-let buffer   = [];   // resolved card objects waiting to be shown
-let inFlight = 0;    // number of fetches currently running
+let buffer    = [];
+let inFlight  = 0;
+let sessionId = 0;  // incremented on shuffle to cancel stale fetches
 let seenCount = 0;
-let deckEls  = [];   // card DOM elements currently in the deck (top = last)
-let isRefilling = false;
+let deckEls   = [];
 
 function rnd(a){ return a[Math.floor(Math.random()*a.length)]; }
 function randTheme(){ return rnd([...activeThemes]); }
@@ -167,44 +167,66 @@ function showToast(msg){
 
 function updateCounter(){
   const el=document.getElementById('counter');
-  const txt=inFlight>0
-    ? 'Carte '+(seenCount+1)+' \u00b7 '+buffer.length+' pretes, '+inFlight+' en chargement'
-    : 'Carte '+(seenCount+1)+' \u00b7 '+buffer.length+' pretes';
-  el.textContent=txt;
+  el.textContent = inFlight>0
+    ? 'Carte '+(seenCount+1)+' \u00b7 '+buffer.length+' pr\u00eates, '+inFlight+' en chargement'
+    : 'Carte '+(seenCount+1)+' \u00b7 '+buffer.length+' pr\u00eates';
 }
 
-async function fetchOneCard(){
+// sanitize: strip markdown bold, normalize tags
+function sanitize(html){
+  return (html||'')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/<b>(.*?)<\/b>/gi,'<strong>$1</strong>');
+}
+
+async function fetchOneCard(sid){
   const theme=randTheme(), geo=randGeo();
   const q=rnd(QUERIES[theme]||QUERIES.politique);
   const geoStr=geo==='fr'?'France':'international';
-  const sys='Tu es journaliste. Trouve une vraie actualite recente (2025-2026). Reponds UNIQUEMENT avec du JSON valide, aucun texte autour, aucun backtick.\nFormat strict: {"date":"[date]","title":"[max 10 mots]","body":"[2-3 phrases, noms propres en balise strong]","source":"[media]","geo":"'+geo+'","theme":"'+theme+'"}';
-  const usr='Cherche: '+q+' ('+geoStr+')';
+  const sys=[
+    'Tu es journaliste. Cherche une actualite recente (2025-2026).',
+    'Reponds UNIQUEMENT avec un objet JSON valide sur une seule ligne, sans markdown, sans backtick, sans texte avant ou apres.',
+    'Format: {"date":"JJ mois AAAA","title":"titre max 10 mots","body":"2-3 phrases. Noms propres entre balises strong.","source":"nom media","geo":"'+geo+'","theme":"'+theme+'"}'
+  ].join(' ');
   const resp=await fetch('/api/messages',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
       model:'claude-sonnet-4-20250514',
-      max_tokens:500,
+      max_tokens:400,
       system:sys,
-      messages:[{role:'user',content:usr}]
+      messages:[{role:'user',content:'Actualite '+THEMES[theme].label+' en '+geoStr+': '+q}]
     })
   });
-  if(resp.status===429){ await new Promise(r=>setTimeout(r,8000)); throw new Error('429'); }
+  if(resp.status===429){
+    await new Promise(r=>setTimeout(r,8000));
+    throw new Error('429');
+  }
   if(!resp.ok) throw new Error('http'+resp.status);
   const data=await resp.json();
   let txt='';
-  for(const b of (data.content||[])) if(b.type==='text'&&b.text){txt=b.text.trim();break;}
+  for(const b of (data.content||[]))
+    if(b.type==='text'&&b.text){txt=b.text.trim();break;}
   if(!txt) throw new Error('empty');
+  // strip any accidental code fences
   const clean=txt.replace(/^```[a-z]*\n?/,'').replace(/\n?```$/,'').trim();
-  return JSON.parse(clean);
+  const card=JSON.parse(clean);
+  card.theme=card.theme||theme;
+  card.geo=card.geo||geo;
+  card.body=sanitize(card.body);
+  return card;
 }
 
-function launchFetch(){
+// FIX: single entry point for launching fetches, guards with sessionId
+function launchFetch(sid){
+  if(sid!==sessionId) return;           // stale session, discard
+  if(buffer.length+inFlight>=BUFFER_TARGET) return; // already full
   inFlight++;
   updateCounter();
-  fetchOneCard()
+  fetchOneCard(sid)
     .then(card=>{
       inFlight--;
+      if(sid!==sessionId){ updateCounter(); return; } // stale, discard result
       buffer.push(card);
       updateCounter();
       tryServeWaiting();
@@ -212,17 +234,21 @@ function launchFetch(){
     .catch(()=>{
       inFlight--;
       updateCounter();
-      setTimeout(refill, 5000);
+      setTimeout(()=>launchFetch(sid), 6000);
     });
 }
 
+// FIX: refill only launches what's actually needed, guards against double-launch
 function refill(){
-  const need=BUFFER_TARGET - buffer.length - inFlight;
+  const need=BUFFER_TARGET-buffer.length-inFlight;
   if(need<=0) return;
+  const sid=sessionId;
   for(let i=0;i<need;i++){
-    setTimeout(launchFetch, i*800);
+    setTimeout(()=>launchFetch(sid), i*700);
   }
 }
+
+// ── DOM helpers ──
 
 function makeCardEl(data){
   const th=THEMES[data.theme]||THEMES.politique;
@@ -246,13 +272,13 @@ function makeCardEl(data){
 }
 
 function makeShimmerEl(){
-  const el=document.createElement('div');
-  el.className='card loading-card';
-  el.dataset.shimmer='1';
   const th=THEMES[randTheme()];
   const geo=randGeo();
   const gDot=geo==='fr'?'#0033a0':'#b5461b';
   const gLabel=geo==='fr'?'France':'Monde';
+  const el=document.createElement('div');
+  el.className='card loading-card';
+  el.dataset.shimmer='1';
   el.innerHTML=
     '<div class="card-meta">'+
       '<div class="card-pill" style="background:'+th.bg+';color:'+th.text+'">'+th.label+'</div>'+
@@ -273,51 +299,49 @@ function rebuildStack(){
   const n=deckEls.length;
   deckEls.forEach((c,i)=>{
     c.classList.remove('behind1','behind2');
-    const d=n-1-i;
-    if(d===1) c.classList.add('behind1');
-    else if(d>=2) c.classList.add('behind2');
+    const fromTop=n-1-i;
+    if(fromTop===1) c.classList.add('behind1');
+    else if(fromTop>=2) c.classList.add('behind2');
     c.style.zIndex=String(i+1);
   });
 }
 
-function addCardToDeck(el){
+function addToDeck(el){
   document.getElementById('deck').appendChild(el);
   deckEls.push(el);
   rebuildStack();
 }
 
-function replaceShimmerWithCard(el){
-  const deck=document.getElementById('deck');
-  const shimmerIdx=deckEls.findIndex(c=>c.dataset.shimmer==='1');
-  if(shimmerIdx>=0){
-    const shimmer=deckEls[shimmerIdx];
-    deck.replaceChild(el,shimmer);
-    deckEls[shimmerIdx]=el;
-    rebuildStack();
-  } else {
-    addCardToDeck(el);
-  }
-}
-
+// FIX: replace the TOP-MOST shimmer (last in array = top of visual stack)
 function tryServeWaiting(){
-  const shimmerIdx=deckEls.findIndex(c=>c.dataset.shimmer==='1');
-  if(shimmerIdx>=0 && buffer.length>0){
-    const data=buffer.shift();
-    updateCounter();
-    replaceShimmerWithCard(makeCardEl(data));
-    if(buffer.length<=REFILL_AT) refill();
+  if(buffer.length===0) return;
+  // find topmost shimmer (search from end = top of stack)
+  for(let i=deckEls.length-1;i>=0;i--){
+    if(deckEls[i].dataset.shimmer==='1'){
+      const data=buffer.shift();
+      updateCounter();
+      const cardEl=makeCardEl(data);
+      cardEl.style.zIndex=deckEls[i].style.zIndex;
+      document.getElementById('deck').replaceChild(cardEl,deckEls[i]);
+      deckEls[i]=cardEl;
+      rebuildStack();
+      if(buffer.length<=REFILL_AT) refill();
+      // try to serve more waiting shimmers
+      if(buffer.length>0) tryServeWaiting();
+      return;
+    }
   }
 }
 
-function serveNextCard(){
+function serveNext(){
   if(buffer.length>0){
     const data=buffer.shift();
     updateCounter();
-    addCardToDeck(makeCardEl(data));
+    addToDeck(makeCardEl(data));
     if(buffer.length<=REFILL_AT) refill();
   } else {
-    addCardToDeck(makeShimmerEl());
-    refill();
+    addToDeck(makeShimmerEl());
+    // don't call refill here — startup refill handles it
   }
 }
 
@@ -325,46 +349,67 @@ function dismissTop(dir){
   if(deckEls.length===0) return;
   const top=deckEls[deckEls.length-1];
   if(top.dataset.shimmer==='1') return;
-  const tx=dir==='right'?'150%':'-150%';
-  const rot=dir==='right'?'20':'-20';
+
+  // animate out
   top.style.transition='transform .30s cubic-bezier(.4,0,.2,1),opacity .25s';
-  top.style.transform='translateX('+tx+') rotate('+rot+'deg)';
+  top.style.transform='translateX('+(dir==='right'?'150%':'-150%')+') rotate('+(dir==='right'?'20':'-20')+'deg)';
   top.style.opacity='0';
-  deckEls.pop();
+
+  // FIX: remove from deckEls immediately so rebuildStack is correct
+  deckEls.splice(deckEls.length-1,1);
   seenCount++;
   updateCounter();
-  setTimeout(()=>{if(top.parentNode)top.remove(); rebuildStack();},300);
-  serveNextCard();
+  rebuildStack();
+
+  setTimeout(()=>{ if(top.parentNode) top.remove(); },320);
+
+  serveNext();
 }
 
+// FIX: proper swipe with cleanup to avoid listener accumulation
 function attachSwipe(el){
-  let sx,sy,dx=0,on=false;
+  let sx,sy,dx=0,active=false;
   const hl=el.querySelector('.hint-like');
   const hn=el.querySelector('.hint-nope');
-  function start(x,y){sx=x;sy=y;dx=0;on=true;el.style.transition='none';}
-  function move(x,y){
-    if(!on) return;
-    const ddx=x-sx,ddy=y-sy;
-    if(Math.abs(ddy)>Math.abs(ddx)+14){on=false;return;}
+
+  function onStart(x,y){ sx=x;sy=y;dx=0;active=true;el.style.transition='none'; }
+  function onMove(x,y){
+    if(!active) return;
+    const ddx=x-sx, ddy=y-sy;
+    if(Math.abs(ddy)>Math.abs(ddx)+14){ active=false; return; }
     dx=ddx;
     el.style.transform='translateX('+dx+'px) rotate('+(dx*0.055)+'deg)';
     const r=Math.min(Math.abs(dx)/75,1);
-    if(hl)hl.style.opacity=dx>0?r:0;
-    if(hn)hn.style.opacity=dx<0?r:0;
+    if(hl) hl.style.opacity=String(dx>0?r:0);
+    if(hn) hn.style.opacity=String(dx<0?r:0);
   }
-  function end(){
-    if(!on) return; on=false;
-    if(hl)hl.style.opacity=0;
-    if(hn)hn.style.opacity=0;
-    if(Math.abs(dx)>75) dismissTop(dx>0?'right':'left');
-    else{el.style.transition='transform .28s cubic-bezier(.4,0,.2,1)';el.style.transform='';}
+  function onEnd(){
+    if(!active) return;
+    active=false;
+    if(hl) hl.style.opacity='0';
+    if(hn) hn.style.opacity='0';
+    window.removeEventListener('mousemove',mmHandler);
+    window.removeEventListener('mouseup',muHandler);
+    if(Math.abs(dx)>75){ dismissTop(dx>0?'right':'left'); }
+    else{ el.style.transition='transform .28s cubic-bezier(.4,0,.2,1)'; el.style.transform=''; }
   }
-  el.addEventListener('mousedown',e=>start(e.clientX,e.clientY));
-  window.addEventListener('mousemove',e=>{if(on)move(e.clientX,e.clientY);});
-  window.addEventListener('mouseup',end);
-  el.addEventListener('touchstart',e=>{const t=e.touches[0];start(t.clientX,t.clientY);},{passive:true});
-  el.addEventListener('touchmove',e=>{const t=e.touches[0];move(t.clientX,t.clientY);},{passive:true});
-  el.addEventListener('touchend',end);
+
+  // FIX: named handlers so we can removeEventListener
+  function mmHandler(e){ onMove(e.clientX,e.clientY); }
+  function muHandler(){ onEnd(); }
+
+  el.addEventListener('mousedown',e=>{
+    onStart(e.clientX,e.clientY);
+    window.addEventListener('mousemove',mmHandler);
+    window.addEventListener('mouseup',muHandler);
+  });
+  el.addEventListener('touchstart',e=>{
+    const t=e.touches[0]; onStart(t.clientX,t.clientY);
+  },{passive:true});
+  el.addEventListener('touchmove',e=>{
+    const t=e.touches[0]; onMove(t.clientX,t.clientY);
+  },{passive:true});
+  el.addEventListener('touchend',onEnd);
 }
 
 function buildFilters(){
@@ -378,7 +423,9 @@ function buildFilters(){
     const txOn=geo==='fr'?'#0033a0':'#8c3210';
     const c=document.createElement('div');
     c.className='chip'+(on?'':' off');
-    c.style.cssText=on?'background:'+bgOn+';color:'+txOn+';border-color:'+bgOn:'background:transparent;color:var(--muted);border-color:var(--border)';
+    c.style.cssText=on
+      ?'background:'+bgOn+';color:'+txOn+';border-color:'+bgOn
+      :'background:transparent;color:var(--muted);border-color:var(--border)';
     c.innerHTML='<span class="chip-dot" style="background:'+dot+'"></span>'+label;
     c.onclick=()=>{
       if(activeGeo.has(geo)){if(activeGeo.size>1)activeGeo.delete(geo);}
@@ -391,7 +438,9 @@ function buildFilters(){
     const on=activeThemes.has(key);
     const c=document.createElement('div');
     c.className='chip'+(on?'':' off');
-    c.style.cssText=on?'background:'+th.bg+';color:'+th.text+';border-color:'+th.bg:'background:transparent;color:var(--muted);border-color:var(--border)';
+    c.style.cssText=on
+      ?'background:'+th.bg+';color:'+th.text+';border-color:'+th.bg
+      :'background:transparent;color:var(--muted);border-color:var(--border)';
     c.textContent=th.label;
     c.onclick=()=>{
       if(activeThemes.has(key)){if(activeThemes.size>1)activeThemes.delete(key);}
@@ -405,18 +454,28 @@ function buildFilters(){
 document.getElementById('btn-skip').onclick=()=>dismissTop('left');
 document.getElementById('btn-next').onclick=()=>dismissTop('right');
 document.getElementById('btn-shuffle').onclick=()=>{
-  buffer=[]; inFlight=0;
+  // FIX: increment sessionId to cancel all in-flight fetches
+  sessionId++;
+  buffer=[];
+  inFlight=0;
+  // clear deck
+  const deck=document.getElementById('deck');
+  deck.innerHTML='';
+  deckEls=[];
+  seenCount=0;
   showToast('Nouvelles actus...');
+  // show 1 shimmer while loading
+  addToDeck(makeShimmerEl());
+  updateCounter();
   refill();
 };
 
 buildFilters();
 
-// Start: show 3 shimmers immediately, then replace them as cards arrive
-serveNextCard();
-serveNextCard();
-serveNextCard();
-refill();
+// FIX: show 1 shimmer at startup, launch exactly BUFFER_TARGET fetches once
+addToDeck(makeShimmerEl());
+updateCounter();
+refill(); // single call — launches up to 10 fetches staggered 700ms apart
 </script>
 </body>
 </html>

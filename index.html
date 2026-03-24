@@ -133,139 +133,130 @@ const THEMES = {
   culture:  {label:'Culture',  bg:'var(--cul-bg)',text:'var(--cul-t)'},
   tech:     {label:'Tech',     bg:'var(--tec-bg)',text:'var(--tec-t)'},
 };
-const THEME_QUERIES = {
-  politique:['actualite politique France 2026','elections municipales France 2026','Marine Le Pen proces appel 2026','gouvernement Lecornu actualite','presidentielle 2027 France sondages'],
-  economie: ['economie France 2025 2026','droits douane Trump impact France','croissance PIB zone euro 2026','inflation France prix mars 2026','bourse CAC40 actualite 2026'],
-  sport:    ['JO hiver Milan Cortina 2026 France medailles','football coupe monde 2026 preparations','Roland Garros 2026 tennis','Ligue 1 football France 2026','rugby France actualite 2026'],
-  cinema:   ['Oscars 2026 resultats gagnants','cinema France sorties mars 2026','festival Cannes 2026 selection','Cesar 2026 ceremonie','film francais box office 2026'],
-  culture:  ['culture France actualite mars 2026','exposition Paris 2026','livre litterature francaise 2026','musique chanson francaise 2026','patrimoine musees France 2026'],
-  tech:     ['intelligence artificielle actualite 2026','Mistral AI France news','DeepSeek IA actualite','cybersecurite France 2026','startup tech France levee fonds 2026'],
+const QUERIES = {
+  politique:['politique France 2026','elections municipales France 2026','Marine Le Pen 2026','gouvernement Lecornu 2026','presidentielle 2027'],
+  economie: ['economie France 2026','droits douane Trump 2026','CAC40 bourse mars 2026','inflation prix France 2026','budget France 2026'],
+  sport:    ['JO Milan Cortina 2026 France','foot coupe monde 2026','Roland Garros tennis 2026','rugby France 2026','athletisme France 2026'],
+  cinema:   ['Oscars 2026 gagnants','cinema France mars 2026','Cannes 2026','Cesar 2026','films sortie France 2026'],
+  culture:  ['culture France 2026','expo Paris 2026','livre francais 2026','musique France 2026','patrimoine France 2026'],
+  tech:     ['IA actualite 2026','Mistral AI 2026','DeepSeek 2026','cybersecurite France 2026','startups tech France 2026'],
 };
 
 let activeThemes = new Set(Object.keys(THEMES));
 let activeGeo    = new Set(['fr','world']);
 
-const BUFFER_SIZE = 10;
-const REFILL_AT   = 3;
-const FETCH_GAP   = 900;
+const BUFFER_TARGET = 10;
+const REFILL_AT     = 3;
 
-let buffer        = [];
-let inFlight      = 0;
-let seenCount     = 0;
-let deckEls       = [];
-let needsCard     = false;
-let fetching      = false;
+let buffer   = [];   // resolved card objects waiting to be shown
+let inFlight = 0;    // number of fetches currently running
+let seenCount = 0;
+let deckEls  = [];   // card DOM elements currently in the deck (top = last)
+let isRefilling = false;
 
-function rnd(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function rnd(a){ return a[Math.floor(Math.random()*a.length)]; }
 function randTheme(){ return rnd([...activeThemes]); }
 function randGeo()  { return rnd([...activeGeo]); }
-function randQuery(t){ return rnd(THEME_QUERIES[t]||THEME_QUERIES.politique); }
 
 function showToast(msg){
   const el=document.getElementById('toast');
-  el.textContent=msg; el.classList.add('show');
+  el.textContent=msg;
+  el.classList.add('show');
   setTimeout(()=>el.classList.remove('show'),2200);
 }
 
 function updateCounter(){
   const el=document.getElementById('counter');
-  const ready=buffer.length;
-  if(inFlight>0 && ready===0){
-    el.textContent='Chargement… ('+inFlight+' en cours)';
-  } else {
-    el.textContent='Carte '+(seenCount+1)+' · '+ready+' en reserve'+(inFlight?' · '+inFlight+' en chargement':'');
-  }
+  const txt=inFlight>0
+    ? 'Carte '+(seenCount+1)+' \u00b7 '+buffer.length+' pretes, '+inFlight+' en chargement'
+    : 'Carte '+(seenCount+1)+' \u00b7 '+buffer.length+' pretes';
+  el.textContent=txt;
 }
 
-async function fetchCard(){
+async function fetchOneCard(){
   const theme=randTheme(), geo=randGeo();
-  const geoFr = geo==='fr';
-  const q=randQuery(theme);
-
-  const sys='Tu es journaliste. Cherche une vraie actualite recente (2025-2026) et reponds UNIQUEMENT avec un objet JSON valide (pas de markdown, pas de backticks).\n'
-    +'Format: {"date":"[date]","title":"[max 10 mots]","body":"[2-3 phrases factuelles, noms propres en <strong>]","source":"[media]","geo":"'+geo+'","theme":"'+theme+'"}';
-  const usr='Sujet: "'+q+'". Geo: '+(geoFr?'France':'international')+'. Theme: '+THEMES[theme].label;
-
+  const q=rnd(QUERIES[theme]||QUERIES.politique);
+  const geoStr=geo==='fr'?'France':'international';
+  const sys='Tu es journaliste. Trouve une vraie actualite recente (2025-2026). Reponds UNIQUEMENT avec du JSON valide, aucun texte autour, aucun backtick.\nFormat strict: {"date":"[date]","title":"[max 10 mots]","body":"[2-3 phrases, noms propres en balise strong]","source":"[media]","geo":"'+geo+'","theme":"'+theme+'"}';
+  const usr='Cherche: '+q+' ('+geoStr+')';
   const resp=await fetch('/api/messages',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
       model:'claude-sonnet-4-20250514',
-      max_tokens:600,
+      max_tokens:500,
       system:sys,
       messages:[{role:'user',content:usr}]
     })
   });
-  if(resp.status===429){ await sleep(6000); throw new Error('429'); }
+  if(resp.status===429){ await new Promise(r=>setTimeout(r,8000)); throw new Error('429'); }
   if(!resp.ok) throw new Error('http'+resp.status);
   const data=await resp.json();
   let txt='';
   for(const b of (data.content||[])) if(b.type==='text'&&b.text){txt=b.text.trim();break;}
   if(!txt) throw new Error('empty');
-  const clean=txt.replace(/^```[a-z]*\s*/,'').replace(/```\s*$/,'').trim();
-  const card=JSON.parse(clean);
-  card.theme=card.theme||theme;
-  card.geo=card.geo||geo;
-  return card;
+  const clean=txt.replace(/^```[a-z]*\n?/,'').replace(/\n?```$/,'').trim();
+  return JSON.parse(clean);
 }
 
-function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function launchFetch(){
+  inFlight++;
+  updateCounter();
+  fetchOneCard()
+    .then(card=>{
+      inFlight--;
+      buffer.push(card);
+      updateCounter();
+      tryServeWaiting();
+    })
+    .catch(()=>{
+      inFlight--;
+      updateCounter();
+      setTimeout(refill, 5000);
+    });
+}
 
-async function fillBuffer(){
-  if(fetching) return;
-  fetching=true;
-  while(buffer.length+inFlight < BUFFER_SIZE){
-    inFlight++;
-    updateCounter();
-    fetchCard()
-      .then(card=>{
-        inFlight--;
-        buffer.push(card);
-        updateCounter();
-        if(needsCard){ needsCard=false; serveCard(); }
-      })
-      .catch(()=>{
-        inFlight--;
-        updateCounter();
-      });
-    await sleep(FETCH_GAP);
-    if(buffer.length+inFlight>=BUFFER_SIZE) break;
+function refill(){
+  const need=BUFFER_TARGET - buffer.length - inFlight;
+  if(need<=0) return;
+  for(let i=0;i<need;i++){
+    setTimeout(launchFetch, i*800);
   }
-  fetching=false;
 }
 
-function buildCardEl(data){
+function makeCardEl(data){
   const th=THEMES[data.theme]||THEMES.politique;
   const geo=data.geo||'fr';
-  const geoLabel=geo==='fr'?'France':'Monde';
-  const geoDot=geo==='fr'?'#0033a0':'#b5461b';
+  const gLabel=geo==='fr'?'France':'Monde';
+  const gDot=geo==='fr'?'#0033a0':'#b5461b';
   const el=document.createElement('div');
   el.className='card';
   el.innerHTML=
     '<div class="card-meta">'+
       '<div class="card-pill" style="background:'+th.bg+';color:'+th.text+'">'+th.label+'</div>'+
-      '<div class="card-geo"><div class="geo-dot" style="background:'+geoDot+'"></div>'+geoLabel+'</div>'+
+      '<div class="card-geo"><div class="geo-dot" style="background:'+gDot+'"></div>'+gLabel+'</div>'+
     '</div>'+
     '<div class="card-date">'+(data.date||'')+'</div>'+
     '<div class="card-title">'+(data.title||'')+'</div>'+
     '<div class="card-body">'+(data.body||'')+'</div>'+
-    (data.source?'<div class="source-badge"><div class="source-dot"></div>Source : '+data.source+'</div>':'')+
-    '<div class="hint-like">Lu</div>'+
-    '<div class="hint-nope">Passer</div>';
+    (data.source?'<div class="source-badge"><div class="source-dot"></div>Source: '+data.source+'</div>':'')+
+    '<div class="hint-like">Lu</div><div class="hint-nope">Passer</div>';
+  attachSwipe(el);
   return el;
 }
 
-function buildShimmerEl(){
-  const theme=randTheme(), geo=randGeo();
-  const th=THEMES[theme];
-  const geoDot=geo==='fr'?'#0033a0':'#b5461b';
-  const geoLabel=geo==='fr'?'France':'Monde';
+function makeShimmerEl(){
   const el=document.createElement('div');
   el.className='card loading-card';
+  el.dataset.shimmer='1';
+  const th=THEMES[randTheme()];
+  const geo=randGeo();
+  const gDot=geo==='fr'?'#0033a0':'#b5461b';
+  const gLabel=geo==='fr'?'France':'Monde';
   el.innerHTML=
     '<div class="card-meta">'+
       '<div class="card-pill" style="background:'+th.bg+';color:'+th.text+'">'+th.label+'</div>'+
-      '<div class="card-geo"><div class="geo-dot" style="background:'+geoDot+'"></div>'+geoLabel+'</div>'+
+      '<div class="card-geo"><div class="geo-dot" style="background:'+gDot+'"></div>'+gLabel+'</div>'+
     '</div>'+
     '<div class="loading-shimmer">'+
       '<div class="shimmer-title"></div>'+
@@ -285,74 +276,91 @@ function rebuildStack(){
     const d=n-1-i;
     if(d===1) c.classList.add('behind1');
     else if(d>=2) c.classList.add('behind2');
+    c.style.zIndex=String(i+1);
   });
 }
 
-function addToDeck(el){
-  const deck=document.getElementById('deck');
-  el.style.zIndex=String(10+deckEls.length);
-  deck.appendChild(el);
+function addCardToDeck(el){
+  document.getElementById('deck').appendChild(el);
   deckEls.push(el);
   rebuildStack();
-  if(!el.classList.contains('loading-card')) attachSwipe(el);
 }
 
-function serveCard(){
-  if(buffer.length===0){ needsCard=true; return; }
-  const data=buffer.shift();
-  updateCounter();
-  if(buffer.length<=REFILL_AT) fillBuffer();
-  const el=buildCardEl(data);
-  addToDeck(el);
+function replaceShimmerWithCard(el){
+  const deck=document.getElementById('deck');
+  const shimmerIdx=deckEls.findIndex(c=>c.dataset.shimmer==='1');
+  if(shimmerIdx>=0){
+    const shimmer=deckEls[shimmerIdx];
+    deck.replaceChild(el,shimmer);
+    deckEls[shimmerIdx]=el;
+    rebuildStack();
+  } else {
+    addCardToDeck(el);
+  }
+}
+
+function tryServeWaiting(){
+  const shimmerIdx=deckEls.findIndex(c=>c.dataset.shimmer==='1');
+  if(shimmerIdx>=0 && buffer.length>0){
+    const data=buffer.shift();
+    updateCounter();
+    replaceShimmerWithCard(makeCardEl(data));
+    if(buffer.length<=REFILL_AT) refill();
+  }
+}
+
+function serveNextCard(){
+  if(buffer.length>0){
+    const data=buffer.shift();
+    updateCounter();
+    addCardToDeck(makeCardEl(data));
+    if(buffer.length<=REFILL_AT) refill();
+  } else {
+    addCardToDeck(makeShimmerEl());
+    refill();
+  }
 }
 
 function dismissTop(dir){
   if(deckEls.length===0) return;
   const top=deckEls[deckEls.length-1];
-  if(top.classList.contains('loading-card')) return;
-
-  top.style.transition='transform .30s cubic-bezier(.4,0,.2,1), opacity .25s';
-  top.style.transform='translateX('+(dir==='right'?'150%':'-150%')+') rotate('+(dir==='right'?'20':'-20')+'deg)';
+  if(top.dataset.shimmer==='1') return;
+  const tx=dir==='right'?'150%':'-150%';
+  const rot=dir==='right'?'20':'-20';
+  top.style.transition='transform .30s cubic-bezier(.4,0,.2,1),opacity .25s';
+  top.style.transform='translateX('+tx+') rotate('+rot+'deg)';
   top.style.opacity='0';
   deckEls.pop();
   seenCount++;
-  setTimeout(()=>{ if(top.parentNode) top.remove(); rebuildStack(); },300);
-
-  if(buffer.length>0){
-    serveCard();
-  } else {
-    needsCard=true;
-    const shimmer=buildShimmerEl();
-    addToDeck(shimmer);
-    updateCounter();
-    if(!fetching) fillBuffer();
-  }
+  updateCounter();
+  setTimeout(()=>{if(top.parentNode)top.remove(); rebuildStack();},300);
+  serveNextCard();
 }
 
 function attachSwipe(el){
-  let sx,sy,dx=0,active=false;
+  let sx,sy,dx=0,on=false;
   const hl=el.querySelector('.hint-like');
   const hn=el.querySelector('.hint-nope');
-  function start(x,y){sx=x;sy=y;dx=0;active=true;el.style.transition='none';}
+  function start(x,y){sx=x;sy=y;dx=0;on=true;el.style.transition='none';}
   function move(x,y){
-    if(!active) return;
+    if(!on) return;
     const ddx=x-sx,ddy=y-sy;
-    if(Math.abs(ddy)>Math.abs(ddx)+14){active=false;return;}
+    if(Math.abs(ddy)>Math.abs(ddx)+14){on=false;return;}
     dx=ddx;
     el.style.transform='translateX('+dx+'px) rotate('+(dx*0.055)+'deg)';
     const r=Math.min(Math.abs(dx)/75,1);
-    if(hl) hl.style.opacity=dx>0?r:0;
-    if(hn) hn.style.opacity=dx<0?r:0;
+    if(hl)hl.style.opacity=dx>0?r:0;
+    if(hn)hn.style.opacity=dx<0?r:0;
   }
   function end(){
-    if(!active) return; active=false;
-    if(hl) hl.style.opacity=0;
-    if(hn) hn.style.opacity=0;
-    if(Math.abs(dx)>75){ dismissTop(dx>0?'right':'left'); }
-    else{ el.style.transition='transform .28s cubic-bezier(.4,0,.2,1)'; el.style.transform=''; }
+    if(!on) return; on=false;
+    if(hl)hl.style.opacity=0;
+    if(hn)hn.style.opacity=0;
+    if(Math.abs(dx)>75) dismissTop(dx>0?'right':'left');
+    else{el.style.transition='transform .28s cubic-bezier(.4,0,.2,1)';el.style.transform='';}
   }
   el.addEventListener('mousedown',e=>start(e.clientX,e.clientY));
-  window.addEventListener('mousemove',e=>{if(active)move(e.clientX,e.clientY);});
+  window.addEventListener('mousemove',e=>{if(on)move(e.clientX,e.clientY);});
   window.addEventListener('mouseup',end);
   el.addEventListener('touchstart',e=>{const t=e.touches[0];start(t.clientX,t.clientY);},{passive:true});
   el.addEventListener('touchmove',e=>{const t=e.touches[0];move(t.clientX,t.clientY);},{passive:true});
@@ -397,18 +405,18 @@ function buildFilters(){
 document.getElementById('btn-skip').onclick=()=>dismissTop('left');
 document.getElementById('btn-next').onclick=()=>dismissTop('right');
 document.getElementById('btn-shuffle').onclick=()=>{
-  buffer=[]; inFlight=0; fetching=false; needsCard=false;
+  buffer=[]; inFlight=0;
   showToast('Nouvelles actus...');
-  fillBuffer().then(()=>{ if(buffer.length>0 && deckEls.length===0) serveCard(); });
+  refill();
 };
 
 buildFilters();
 
-fillBuffer().then(()=>{
-  serveCard();
-  serveCard();
-  serveCard();
-});
+// Start: show 3 shimmers immediately, then replace them as cards arrive
+serveNextCard();
+serveNextCard();
+serveNextCard();
+refill();
 </script>
 </body>
 </html>

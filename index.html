@@ -127,372 +127,288 @@
 <script>
 const THEMES = {
   politique:{label:'Politique',bg:'var(--pol-bg)',text:'var(--pol-t)'},
-  economie: {label:'Économie', bg:'var(--eco-bg)',text:'var(--eco-t)'},
+  economie: {label:'Economie', bg:'var(--eco-bg)',text:'var(--eco-t)'},
   sport:    {label:'Sport',    bg:'var(--spo-bg)',text:'var(--spo-t)'},
-  cinema:   {label:'Cinéma',   bg:'var(--cin-bg)',text:'var(--cin-t)'},
+  cinema:   {label:'Cinema',   bg:'var(--cin-bg)',text:'var(--cin-t)'},
   culture:  {label:'Culture',  bg:'var(--cul-bg)',text:'var(--cul-t)'},
   tech:     {label:'Tech',     bg:'var(--tec-bg)',text:'var(--tec-t)'},
 };
-
 const THEME_QUERIES = {
-  politique: ['actualité politique France 2025 2026','élections France 2026','géopolitique monde 2025 2026','gouvernement Lecornu actualité','présidentielle 2027 France'],
-  economie:  ['économie France 2025 2026','droits de douane Trump économie','croissance PIB France 2025','inflation France 2026','bourse marchés financiers mars 2026'],
-  sport:     ['sport actualité France mars 2026','JO hiver Milan Cortina 2026 résultats','football coupe du monde 2026 préparatifs','tennis actualité 2025 2026','athlétisme résultats 2025'],
-  cinema:    ['cinéma France actualité 2025 2026','Oscars 2026 résultats','festival Cannes 2025 palmarès','sorties films France 2026','César 2026 cérémonie'],
-  culture:   ['culture actualité France 2025 2026','exposition art Paris 2025 2026','littérature française 2025','musique actualité France 2026','patrimoine culture France'],
-  tech:      ['technologie IA actualité 2025 2026','Mistral AI France actualité','intelligence artificielle monde 2025','tech startup France 2026','cybersécurité actualité 2025'],
+  politique:['actualite politique France 2026','elections municipales France 2026','Marine Le Pen proces appel 2026','gouvernement Lecornu actualite','presidentielle 2027 France sondages'],
+  economie: ['economie France 2025 2026','droits douane Trump impact France','croissance PIB zone euro 2026','inflation France prix mars 2026','bourse CAC40 actualite 2026'],
+  sport:    ['JO hiver Milan Cortina 2026 France medailles','football coupe monde 2026 preparations','Roland Garros 2026 tennis','Ligue 1 football France 2026','rugby France actualite 2026'],
+  cinema:   ['Oscars 2026 resultats gagnants','cinema France sorties mars 2026','festival Cannes 2026 selection','Cesar 2026 ceremonie','film francais box office 2026'],
+  culture:  ['culture France actualite mars 2026','exposition Paris 2026','livre litterature francaise 2026','musique chanson francaise 2026','patrimoine musees France 2026'],
+  tech:     ['intelligence artificielle actualite 2026','Mistral AI France news','DeepSeek IA actualite','cybersecurite France 2026','startup tech France levee fonds 2026'],
 };
 
 let activeThemes = new Set(Object.keys(THEMES));
-let activeGeo = new Set(['fr','world']);
+let activeGeo    = new Set(['fr','world']);
 
-// ── BUFFER SYSTEM ──
-// buffer: array of resolved card data objects, ready to display
-// fetchQueue: number of fetches currently in flight
-// BUFFER_TARGET: how many cards we want ready ahead at all times
-// REFILL_THRESHOLD: when buffered cards drop to this, start refilling
-const BUFFER_TARGET = 10;
-const REFILL_THRESHOLD = 3;
-let buffer = [];
-let fetchesInFlight = 0;
-let seenCount = 0;
-let deckCards = [];
+const BUFFER_SIZE = 10;
+const REFILL_AT   = 3;
+const FETCH_GAP   = 900;
 
-function randomTheme() {
-  const opts = [...activeThemes];
-  return opts[Math.floor(Math.random() * opts.length)];
-}
-function randomGeo() {
-  const opts = [...activeGeo];
-  return opts[Math.floor(Math.random() * opts.length)];
-}
-function randomQuery(theme) {
-  const qs = THEME_QUERIES[theme] || THEME_QUERIES.politique;
-  return qs[Math.floor(Math.random() * qs.length)];
+let buffer        = [];
+let inFlight      = 0;
+let seenCount     = 0;
+let deckEls       = [];
+let needsCard     = false;
+let fetching      = false;
+
+function rnd(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function randTheme(){ return rnd([...activeThemes]); }
+function randGeo()  { return rnd([...activeGeo]); }
+function randQuery(t){ return rnd(THEME_QUERIES[t]||THEME_QUERIES.politique); }
+
+function showToast(msg){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),2200);
 }
 
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2200);
+function updateCounter(){
+  const el=document.getElementById('counter');
+  const ready=buffer.length;
+  if(inFlight>0 && ready===0){
+    el.textContent='Chargement… ('+inFlight+' en cours)';
+  } else {
+    el.textContent='Carte '+(seenCount+1)+' · '+ready+' en reserve'+(inFlight?' · '+inFlight+' en chargement':'');
+  }
 }
 
-async function fetchOneCard() {
-  const theme = randomTheme();
-  const geo = randomGeo();
-  const query = randomQuery(theme);
-  const geoLabel = geo === 'fr' ? 'France' : 'monde';
-  const themeLabel = THEMES[theme].label;
+async function fetchCard(){
+  const theme=randTheme(), geo=randGeo();
+  const geoFr = geo==='fr';
+  const q=randQuery(theme);
 
-  const systemPrompt = `Tu es un journaliste expert. À partir des résultats de recherche web, génère UNE actualité récente (2025-2026) sous forme de carte JSON.
-Réponds UNIQUEMENT avec un objet JSON valide, sans markdown, sans backticks, sans texte avant ou après.
-Format exact :
-{"date":"[date précise]","title":"[titre court et percutant, max 10 mots]","body":"[résumé factuel 2-3 phrases, avec les noms propres en <strong>]","source":"[nom du média source]","geo":"${geo}","theme":"${theme}"}
-La carte doit couvrir l'actualité ${themeLabel} en ${geoLabel === 'France' ? 'France' : 'a l\'international'}.`;
+  const sys='Tu es journaliste. Cherche une vraie actualite recente (2025-2026) et reponds UNIQUEMENT avec un objet JSON valide (pas de markdown, pas de backticks).\n'
+    +'Format: {"date":"[date]","title":"[max 10 mots]","body":"[2-3 phrases factuelles, noms propres en <strong>]","source":"[media]","geo":"'+geo+'","theme":"'+theme+'"}';
+  const usr='Sujet: "'+q+'". Geo: '+(geoFr?'France':'international')+'. Theme: '+THEMES[theme].label;
 
-  const userPrompt = `Recherche : "${query}"\nGénère une carte d'actualité sur ce sujet pour ${geoLabel}.`;
-
-  const resp = await fetch('/api/messages', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages: [{role:'user',content:userPrompt}]
+  const resp=await fetch('/api/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'claude-sonnet-4-20250514',
+      max_tokens:600,
+      system:sys,
+      messages:[{role:'user',content:usr}]
     })
   });
-
-  if (resp.status === 429) {
-    await new Promise(r => setTimeout(r, 5000));
-    throw new Error('rate_limit');
-  }
-  if (!resp.ok) throw new Error('API error ' + resp.status);
-  const data = await resp.json();
-
-  let jsonStr = '';
-  for (const block of data.content) {
-    if (block.type === 'text' && block.text) { jsonStr = block.text.trim(); break; }
-  }
-  if (!jsonStr) throw new Error('No text in response');
-  const clean = jsonStr.replace(/^```json?\s*/,'').replace(/```\s*$/,'').trim();
-  return JSON.parse(clean);
+  if(resp.status===429){ await sleep(6000); throw new Error('429'); }
+  if(!resp.ok) throw new Error('http'+resp.status);
+  const data=await resp.json();
+  let txt='';
+  for(const b of (data.content||[])) if(b.type==='text'&&b.text){txt=b.text.trim();break;}
+  if(!txt) throw new Error('empty');
+  const clean=txt.replace(/^```[a-z]*\s*/,'').replace(/```\s*$/,'').trim();
+  const card=JSON.parse(clean);
+  card.theme=card.theme||theme;
+  card.geo=card.geo||geo;
+  return card;
 }
 
-// Fill the buffer up to BUFFER_TARGET, one fetch at a time (sequential to avoid 429)
-async function fillBuffer() {
-  const needed = BUFFER_TARGET - buffer.length - fetchesInFlight;
-  if (needed <= 0) return;
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-  // Launch fetches sequentially with a small gap to avoid rate limits
-  for (let i = 0; i < needed; i++) {
-    if (buffer.length + fetchesInFlight >= BUFFER_TARGET) break;
-    fetchesInFlight++;
+async function fillBuffer(){
+  if(fetching) return;
+  fetching=true;
+  while(buffer.length+inFlight < BUFFER_SIZE){
+    inFlight++;
     updateCounter();
-    fetchOneCard()
-      .then(data => {
-        buffer.push(data);
-        fetchesInFlight--;
+    fetchCard()
+      .then(card=>{
+        inFlight--;
+        buffer.push(card);
         updateCounter();
-        // If the deck is waiting for a card, serve it now
-        maybeServeFromBuffer();
+        if(needsCard){ needsCard=false; serveCard(); }
       })
-      .catch(() => {
-        fetchesInFlight--;
-        // Retry after a delay
-        setTimeout(fillBuffer, 6000);
+      .catch(()=>{
+        inFlight--;
+        updateCounter();
       });
-    // Small stagger between parallel fetches to avoid hitting rate limits
-    await new Promise(r => setTimeout(r, 800));
+    await sleep(FETCH_GAP);
+    if(buffer.length+inFlight>=BUFFER_SIZE) break;
   }
+  fetching=false;
 }
 
-function updateCounter() {
-  const ready = buffer.length;
-  const loading = fetchesInFlight;
-  const el = document.getElementById('counter');
-  if (loading > 0 && ready === 0) {
-    el.textContent = 'Chargement des actualités… (' + loading + ' en cours)';
-  } else if (loading > 0) {
-    el.textContent = 'Carte ' + (seenCount + 1) + ' · ' + ready + ' prêtes, ' + loading + ' en chargement';
-  } else {
-    el.textContent = 'Carte ' + (seenCount + 1) + ' · ' + ready + ' cartes prêtes';
-  }
-  const pct = Math.min(seenCount / Math.max(seenCount + ready, 1) * 100, 92);
-  document.getElementById('progress').style.width = pct + '%';
-}
-
-// Called after each swipe — checks if buffer needs refilling
-function checkRefill() {
-  if (buffer.length + fetchesInFlight < BUFFER_TARGET) {
-    fillBuffer();
-  }
-}
-
-let waitingForCard = false;
-
-function maybeServeFromBuffer() {
-  if (!waitingForCard) return;
-  if (buffer.length === 0) return;
-  waitingForCard = false;
-  const data = buffer.shift();
-  // Remove any lingering loading card
-  const deck = document.getElementById('deck');
-  const loadingCards = deck.querySelectorAll('.loading-card');
-  loadingCards.forEach(c => c.remove());
-  deckCards = deckCards.filter(c => !c.classList.contains('loading-card'));
-
-  const el = buildCard(data);
-  el.style.zIndex = 10;
-  deck.appendChild(el);
-  deckCards.push(el);
-  rebuildStack();
-  initSwipe(el);
-  updateCounter();
-  checkRefill();
-}
-
-function pushNextCard() {
-  if (buffer.length > 0) {
-    const data = buffer.shift();
-    const el = buildCard(data);
-    el.style.zIndex = 10;
-    const deck = document.getElementById('deck');
-    deck.appendChild(el);
-    deckCards.push(el);
-    rebuildStack();
-    initSwipe(el);
-    updateCounter();
-    checkRefill();
-  } else {
-    // Buffer empty — show loading card and wait
-    waitingForCard = true;
-    const {t, g} = {
-      t: [...activeThemes][Math.floor(Math.random() * activeThemes.size)],
-      g: [...activeGeo][Math.floor(Math.random() * activeGeo.size)]
-    };
-    const loadingEl = buildLoadingCard(t, g);
-    loadingEl.style.zIndex = 10;
-    const deck = document.getElementById('deck');
-    deck.appendChild(loadingEl);
-    deckCards.push(loadingEl);
-    rebuildStack();
-    updateCounter();
-    if (fetchesInFlight === 0) fillBuffer();
-  }
-}
-
-function buildLoadingCard(theme, geo) {
-  const th = THEMES[theme] || THEMES.politique;
-  const geoLabel = geo === 'fr' ? 'France' : 'Monde';
-  const geoDot = geo === 'fr' ? '#0033a0' : '#b5461b';
-  const el = document.createElement('div');
-  el.className = 'card loading-card';
-  el.innerHTML =
-    '<div class="card-meta">' +
-      '<div class="card-pill" style="background:' + th.bg + ';color:' + th.text + '">' + th.label + '</div>' +
-      '<div class="card-geo"><div class="geo-dot" style="background:' + geoDot + '"></div>' + geoLabel + '</div>' +
-    '</div>' +
-    '<div class="loading-shimmer">' +
-      '<div class="shimmer-title"></div>' +
-      '<div class="shimmer-line wide"></div>' +
-      '<div class="shimmer-line wide"></div>' +
-      '<div class="shimmer-line med"></div>' +
-      '<div class="shimmer-line short"></div>' +
-    '</div>' +
-    '<div class="loading-label">Chargement en cours…</div>';
+function buildCardEl(data){
+  const th=THEMES[data.theme]||THEMES.politique;
+  const geo=data.geo||'fr';
+  const geoLabel=geo==='fr'?'France':'Monde';
+  const geoDot=geo==='fr'?'#0033a0':'#b5461b';
+  const el=document.createElement('div');
+  el.className='card';
+  el.innerHTML=
+    '<div class="card-meta">'+
+      '<div class="card-pill" style="background:'+th.bg+';color:'+th.text+'">'+th.label+'</div>'+
+      '<div class="card-geo"><div class="geo-dot" style="background:'+geoDot+'"></div>'+geoLabel+'</div>'+
+    '</div>'+
+    '<div class="card-date">'+(data.date||'')+'</div>'+
+    '<div class="card-title">'+(data.title||'')+'</div>'+
+    '<div class="card-body">'+(data.body||'')+'</div>'+
+    (data.source?'<div class="source-badge"><div class="source-dot"></div>Source : '+data.source+'</div>':'')+
+    '<div class="hint-like">Lu</div>'+
+    '<div class="hint-nope">Passer</div>';
   return el;
 }
 
-function buildCard(data) {
-  const theme = data.theme || 'politique';
-  const geo = data.geo || 'fr';
-  const th = THEMES[theme] || THEMES.politique;
-  const geoLabel = geo === 'fr' ? 'France' : 'Monde';
-  const geoDot = geo === 'fr' ? '#0033a0' : '#b5461b';
-  const el = document.createElement('div');
-  el.className = 'card';
-  el.innerHTML =
-    '<div class="card-meta">' +
-      '<div class="card-pill" style="background:' + th.bg + ';color:' + th.text + '">' + th.label + '</div>' +
-      '<div class="card-geo"><div class="geo-dot" style="background:' + geoDot + '"></div>' + geoLabel + '</div>' +
-    '</div>' +
-    '<div class="card-date">' + (data.date || '') + '</div>' +
-    '<div class="card-title">' + (data.title || '') + '</div>' +
-    '<div class="card-body">' + (data.body || '') + '</div>' +
-    (data.source ? '<div class="source-badge"><div class="source-dot"></div>Source : ' + data.source + '</div>' : '');
+function buildShimmerEl(){
+  const theme=randTheme(), geo=randGeo();
+  const th=THEMES[theme];
+  const geoDot=geo==='fr'?'#0033a0':'#b5461b';
+  const geoLabel=geo==='fr'?'France':'Monde';
+  const el=document.createElement('div');
+  el.className='card loading-card';
+  el.innerHTML=
+    '<div class="card-meta">'+
+      '<div class="card-pill" style="background:'+th.bg+';color:'+th.text+'">'+th.label+'</div>'+
+      '<div class="card-geo"><div class="geo-dot" style="background:'+geoDot+'"></div>'+geoLabel+'</div>'+
+    '</div>'+
+    '<div class="loading-shimmer">'+
+      '<div class="shimmer-title"></div>'+
+      '<div class="shimmer-line wide"></div>'+
+      '<div class="shimmer-line wide"></div>'+
+      '<div class="shimmer-line med"></div>'+
+      '<div class="shimmer-line short"></div>'+
+    '</div>'+
+    '<div class="loading-label">Chargement en cours...</div>';
   return el;
 }
 
-function rebuildStack() {
-  const n = deckCards.length;
-  deckCards.forEach((c, i) => {
+function rebuildStack(){
+  const n=deckEls.length;
+  deckEls.forEach((c,i)=>{
     c.classList.remove('behind1','behind2');
-    const fromTop = n - 1 - i;
-    if (fromTop === 1) c.classList.add('behind1');
-    else if (fromTop >= 2) c.classList.add('behind2');
+    const d=n-1-i;
+    if(d===1) c.classList.add('behind1');
+    else if(d>=2) c.classList.add('behind2');
   });
 }
 
-function dismissTop(dir) {
-  if (deckCards.length === 0) return;
-  const top = deckCards[deckCards.length - 1];
-  if (top.classList.contains('loading-card')) return;
+function addToDeck(el){
+  const deck=document.getElementById('deck');
+  el.style.zIndex=String(10+deckEls.length);
+  deck.appendChild(el);
+  deckEls.push(el);
+  rebuildStack();
+  if(!el.classList.contains('loading-card')) attachSwipe(el);
+}
 
-  const tx = dir === 'right' ? 150 : -150;
-  const rot = dir === 'right' ? 20 : -20;
-  top.style.transition = 'transform .32s cubic-bezier(.4,0,.2,1), opacity .28s';
-  top.style.transform = 'translateX(' + tx + '%) rotate(' + rot + 'deg)';
-  top.style.opacity = '0';
+function serveCard(){
+  if(buffer.length===0){ needsCard=true; return; }
+  const data=buffer.shift();
+  updateCounter();
+  if(buffer.length<=REFILL_AT) fillBuffer();
+  const el=buildCardEl(data);
+  addToDeck(el);
+}
 
-  deckCards.pop();
+function dismissTop(dir){
+  if(deckEls.length===0) return;
+  const top=deckEls[deckEls.length-1];
+  if(top.classList.contains('loading-card')) return;
+
+  top.style.transition='transform .30s cubic-bezier(.4,0,.2,1), opacity .25s';
+  top.style.transform='translateX('+(dir==='right'?'150%':'-150%')+') rotate('+(dir==='right'?'20':'-20')+'deg)';
+  top.style.opacity='0';
+  deckEls.pop();
   seenCount++;
+  setTimeout(()=>{ if(top.parentNode) top.remove(); rebuildStack(); },300);
 
-  setTimeout(() => {
-    if (top.parentNode) top.remove();
-    rebuildStack();
-  }, 310);
-
-  pushNextCard();
-
-  // Refill when buffer drops to threshold (= 8th card swiped = 2 remaining → refill)
-  if (buffer.length <= REFILL_THRESHOLD) checkRefill();
+  if(buffer.length>0){
+    serveCard();
+  } else {
+    needsCard=true;
+    const shimmer=buildShimmerEl();
+    addToDeck(shimmer);
+    updateCounter();
+    if(!fetching) fillBuffer();
+  }
 }
 
-function initSwipe(el) {
-  if (el.classList.contains('loading-card')) return;
-  let sx, sy, dx = 0, dragging = false;
-  const hl = el.querySelector('.hint-like');
-  const hn = el.querySelector('.hint-nope');
-
-  function start(x, y) { sx = x; sy = y; dx = 0; dragging = true; el.style.transition = 'none'; }
-  function move(x, y) {
-    if (!dragging) return;
-    const ddx = x - sx, ddy = y - sy;
-    if (Math.abs(ddy) > Math.abs(ddx) + 12) { dragging = false; return; }
-    dx = ddx;
-    el.style.transform = 'translateX(' + dx + 'px) rotate(' + (dx * 0.055) + 'deg)';
-    const r = Math.min(Math.abs(dx) / 75, 1);
-    if (hl) hl.style.opacity = dx > 0 ? r : 0;
-    if (hn) hn.style.opacity = dx < 0 ? r : 0;
+function attachSwipe(el){
+  let sx,sy,dx=0,active=false;
+  const hl=el.querySelector('.hint-like');
+  const hn=el.querySelector('.hint-nope');
+  function start(x,y){sx=x;sy=y;dx=0;active=true;el.style.transition='none';}
+  function move(x,y){
+    if(!active) return;
+    const ddx=x-sx,ddy=y-sy;
+    if(Math.abs(ddy)>Math.abs(ddx)+14){active=false;return;}
+    dx=ddx;
+    el.style.transform='translateX('+dx+'px) rotate('+(dx*0.055)+'deg)';
+    const r=Math.min(Math.abs(dx)/75,1);
+    if(hl) hl.style.opacity=dx>0?r:0;
+    if(hn) hn.style.opacity=dx<0?r:0;
   }
-  function end() {
-    if (!dragging) return;
-    dragging = false;
-    if (hl) hl.style.opacity = 0;
-    if (hn) hn.style.opacity = 0;
-    if (Math.abs(dx) > 75) { dismissTop(dx > 0 ? 'right' : 'left'); }
-    else {
-      el.style.transition = 'transform .28s cubic-bezier(.4,0,.2,1)';
-      el.style.transform = '';
-    }
+  function end(){
+    if(!active) return; active=false;
+    if(hl) hl.style.opacity=0;
+    if(hn) hn.style.opacity=0;
+    if(Math.abs(dx)>75){ dismissTop(dx>0?'right':'left'); }
+    else{ el.style.transition='transform .28s cubic-bezier(.4,0,.2,1)'; el.style.transform=''; }
   }
-  el.addEventListener('mousedown', e => start(e.clientX, e.clientY));
-  window.addEventListener('mousemove', e => { if (dragging) move(e.clientX, e.clientY); });
-  window.addEventListener('mouseup', end);
-  el.addEventListener('touchstart', e => { const t = e.touches[0]; start(t.clientX, t.clientY); }, {passive:true});
-  el.addEventListener('touchmove', e => { const t = e.touches[0]; move(t.clientX, t.clientY); }, {passive:true});
-  el.addEventListener('touchend', end);
+  el.addEventListener('mousedown',e=>start(e.clientX,e.clientY));
+  window.addEventListener('mousemove',e=>{if(active)move(e.clientX,e.clientY);});
+  window.addEventListener('mouseup',end);
+  el.addEventListener('touchstart',e=>{const t=e.touches[0];start(t.clientX,t.clientY);},{passive:true});
+  el.addEventListener('touchmove',e=>{const t=e.touches[0];move(t.clientX,t.clientY);},{passive:true});
+  el.addEventListener('touchend',end);
 }
 
-function buildFilters() {
-  const wrap = document.getElementById('filters');
-  wrap.innerHTML = '';
-
-  ['fr','world'].forEach(geo => {
-    const on = activeGeo.has(geo);
-    const label = geo === 'fr' ? 'France' : 'Monde';
-    const dot = geo === 'fr' ? '#0033a0' : '#b5461b';
-    const bgOn = geo === 'fr' ? '#dce6fb' : '#fbe8e1';
-    const txOn = geo === 'fr' ? '#0033a0' : '#8c3210';
-    const chip = document.createElement('div');
-    chip.className = 'chip' + (on ? '' : ' off');
-    chip.style.cssText = on
-      ? 'background:' + bgOn + ';color:' + txOn + ';border-color:' + bgOn
-      : 'background:transparent;color:var(--muted);border-color:var(--border)';
-    chip.innerHTML = '<span class="chip-dot" style="background:' + dot + '"></span>' + label;
-    chip.onclick = () => {
-      if (activeGeo.has(geo)) { if (activeGeo.size > 1) activeGeo.delete(geo); }
+function buildFilters(){
+  const wrap=document.getElementById('filters');
+  wrap.innerHTML='';
+  ['fr','world'].forEach(geo=>{
+    const on=activeGeo.has(geo);
+    const label=geo==='fr'?'France':'Monde';
+    const dot=geo==='fr'?'#0033a0':'#b5461b';
+    const bgOn=geo==='fr'?'#dce6fb':'#fbe8e1';
+    const txOn=geo==='fr'?'#0033a0':'#8c3210';
+    const c=document.createElement('div');
+    c.className='chip'+(on?'':' off');
+    c.style.cssText=on?'background:'+bgOn+';color:'+txOn+';border-color:'+bgOn:'background:transparent;color:var(--muted);border-color:var(--border)';
+    c.innerHTML='<span class="chip-dot" style="background:'+dot+'"></span>'+label;
+    c.onclick=()=>{
+      if(activeGeo.has(geo)){if(activeGeo.size>1)activeGeo.delete(geo);}
       else activeGeo.add(geo);
       buildFilters();
     };
-    wrap.appendChild(chip);
+    wrap.appendChild(c);
   });
-
-  Object.entries(THEMES).forEach(([key, th]) => {
-    const on = activeThemes.has(key);
-    const chip = document.createElement('div');
-    chip.className = 'chip' + (on ? '' : ' off');
-    chip.style.cssText = on
-      ? 'background:' + th.bg + ';color:' + th.text + ';border-color:' + th.bg
-      : 'background:transparent;color:var(--muted);border-color:var(--border)';
-    chip.textContent = th.label;
-    chip.onclick = () => {
-      if (activeThemes.has(key)) { if (activeThemes.size > 1) activeThemes.delete(key); }
+  Object.entries(THEMES).forEach(([key,th])=>{
+    const on=activeThemes.has(key);
+    const c=document.createElement('div');
+    c.className='chip'+(on?'':' off');
+    c.style.cssText=on?'background:'+th.bg+';color:'+th.text+';border-color:'+th.bg:'background:transparent;color:var(--muted);border-color:var(--border)';
+    c.textContent=th.label;
+    c.onclick=()=>{
+      if(activeThemes.has(key)){if(activeThemes.size>1)activeThemes.delete(key);}
       else activeThemes.add(key);
       buildFilters();
     };
-    wrap.appendChild(chip);
+    wrap.appendChild(c);
   });
 }
 
-document.getElementById('btn-skip').onclick = () => dismissTop('left');
-document.getElementById('btn-next').onclick = () => dismissTop('right');
-document.getElementById('btn-shuffle').onclick = () => {
-  showToast('Nouveau sujet…');
-  // Clear buffer and refill with new themes/geo
-  buffer = [];
-  fetchesInFlight = 0;
-  fillBuffer();
-  showToast('Nouvelles actus en chargement…');
+document.getElementById('btn-skip').onclick=()=>dismissTop('left');
+document.getElementById('btn-next').onclick=()=>dismissTop('right');
+document.getElementById('btn-shuffle').onclick=()=>{
+  buffer=[]; inFlight=0; fetching=false; needsCard=false;
+  showToast('Nouvelles actus...');
+  fillBuffer().then(()=>{ if(buffer.length>0 && deckEls.length===0) serveCard(); });
 };
 
 buildFilters();
-// Show first card immediately (loading shimmer while buffer fills)
-pushNextCard();
-// Fill the buffer — fetches run in background
-fillBuffer();
+
+fillBuffer().then(()=>{
+  serveCard();
+  serveCard();
+  serveCard();
+});
 </script>
 </body>
 </html>

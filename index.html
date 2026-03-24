@@ -189,7 +189,7 @@ async function fetchOneCard() {
 Réponds UNIQUEMENT avec un objet JSON valide, sans markdown, sans backticks, sans texte avant ou après.
 Format exact :
 {"date":"[date précise]","title":"[titre court et percutant, max 10 mots]","body":"[résumé factuel 2-3 phrases, avec les noms propres en <strong>]","source":"[nom du média source]","geo":"${geo}","theme":"${theme}"}
-La carte doit couvrir l'actualité ${themeLabel} en ${geoLabel === 'France' ? 'France' : "à l'international"}.`;
+La carte doit couvrir l'actualité ${themeLabel} en ${geoLabel === 'France' ? 'France' : 'a l\'international'}.`;
 
   const userPrompt = `Recherche : "${query}"\nGénère une carte d'actualité sur ce sujet pour ${geoLabel}.`;
 
@@ -341,7 +341,7 @@ function buildLoadingCard(theme, geo) {
       '<div class="shimmer-line med"></div>' +
       '<div class="shimmer-line short"></div>' +
     '</div>' +
-    '<div class="loading-label">Chargement de l'actu…</div>';
+    '<div class="loading-label">Chargement en cours…</div>';
   return el;
 }
 

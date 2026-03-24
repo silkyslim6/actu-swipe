@@ -145,11 +145,18 @@ const THEME_QUERIES = {
 
 let activeThemes = new Set(Object.keys(THEMES));
 let activeGeo = new Set(['fr','world']);
-let cardQueue = [];
+
+// ── BUFFER SYSTEM ──
+// buffer: array of resolved card data objects, ready to display
+// fetchQueue: number of fetches currently in flight
+// BUFFER_TARGET: how many cards we want ready ahead at all times
+// REFILL_THRESHOLD: when buffered cards drop to this, start refilling
+const BUFFER_TARGET = 10;
+const REFILL_THRESHOLD = 3;
+let buffer = [];
+let fetchesInFlight = 0;
 let seenCount = 0;
-let totalGenerated = 0;
-let isFetching = false;
-let pendingCard = null;
+let deckCards = [];
 
 function randomTheme() {
   const opts = [...activeThemes];
@@ -171,7 +178,9 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-async function fetchNewsCard(theme, geo) {
+async function fetchOneCard() {
+  const theme = randomTheme();
+  const geo = randomGeo();
   const query = randomQuery(theme);
   const geoLabel = geo === 'fr' ? 'France' : 'monde';
   const themeLabel = THEMES[theme].label;
@@ -180,7 +189,7 @@ async function fetchNewsCard(theme, geo) {
 Réponds UNIQUEMENT avec un objet JSON valide, sans markdown, sans backticks, sans texte avant ou après.
 Format exact :
 {"date":"[date précise]","title":"[titre court et percutant, max 10 mots]","body":"[résumé factuel 2-3 phrases, avec les noms propres en <strong>]","source":"[nom du média source]","geo":"${geo}","theme":"${theme}"}
-La carte doit couvrir l'actualité ${themeLabel} en ${geoLabel === 'France' ? 'France' : 'à l\'international'}.`;
+La carte doit couvrir l'actualité ${themeLabel} en ${geoLabel === 'France' ? 'France' : "à l'international"}.`;
 
   const userPrompt = `Recherche : "${query}"\nGénère une carte d'actualité sur ce sujet pour ${geoLabel}.`;
 
@@ -195,20 +204,123 @@ La carte doit couvrir l'actualité ${themeLabel} en ${geoLabel === 'France' ? 'F
     })
   });
 
+  if (resp.status === 429) {
+    await new Promise(r => setTimeout(r, 5000));
+    throw new Error('rate_limit');
+  }
   if (!resp.ok) throw new Error('API error ' + resp.status);
   const data = await resp.json();
 
   let jsonStr = '';
   for (const block of data.content) {
-    if (block.type === 'text' && block.text) {
-      jsonStr = block.text.trim();
-      break;
-    }
+    if (block.type === 'text' && block.text) { jsonStr = block.text.trim(); break; }
   }
   if (!jsonStr) throw new Error('No text in response');
-
   const clean = jsonStr.replace(/^```json?\s*/,'').replace(/```\s*$/,'').trim();
   return JSON.parse(clean);
+}
+
+// Fill the buffer up to BUFFER_TARGET, one fetch at a time (sequential to avoid 429)
+async function fillBuffer() {
+  const needed = BUFFER_TARGET - buffer.length - fetchesInFlight;
+  if (needed <= 0) return;
+
+  // Launch fetches sequentially with a small gap to avoid rate limits
+  for (let i = 0; i < needed; i++) {
+    if (buffer.length + fetchesInFlight >= BUFFER_TARGET) break;
+    fetchesInFlight++;
+    updateCounter();
+    fetchOneCard()
+      .then(data => {
+        buffer.push(data);
+        fetchesInFlight--;
+        updateCounter();
+        // If the deck is waiting for a card, serve it now
+        maybeServeFromBuffer();
+      })
+      .catch(() => {
+        fetchesInFlight--;
+        // Retry after a delay
+        setTimeout(fillBuffer, 6000);
+      });
+    // Small stagger between parallel fetches to avoid hitting rate limits
+    await new Promise(r => setTimeout(r, 800));
+  }
+}
+
+function updateCounter() {
+  const ready = buffer.length;
+  const loading = fetchesInFlight;
+  const el = document.getElementById('counter');
+  if (loading > 0 && ready === 0) {
+    el.textContent = 'Chargement des actualités… (' + loading + ' en cours)';
+  } else if (loading > 0) {
+    el.textContent = 'Carte ' + (seenCount + 1) + ' · ' + ready + ' prêtes, ' + loading + ' en chargement';
+  } else {
+    el.textContent = 'Carte ' + (seenCount + 1) + ' · ' + ready + ' cartes prêtes';
+  }
+  const pct = Math.min(seenCount / Math.max(seenCount + ready, 1) * 100, 92);
+  document.getElementById('progress').style.width = pct + '%';
+}
+
+// Called after each swipe — checks if buffer needs refilling
+function checkRefill() {
+  if (buffer.length + fetchesInFlight < BUFFER_TARGET) {
+    fillBuffer();
+  }
+}
+
+let waitingForCard = false;
+
+function maybeServeFromBuffer() {
+  if (!waitingForCard) return;
+  if (buffer.length === 0) return;
+  waitingForCard = false;
+  const data = buffer.shift();
+  // Remove any lingering loading card
+  const deck = document.getElementById('deck');
+  const loadingCards = deck.querySelectorAll('.loading-card');
+  loadingCards.forEach(c => c.remove());
+  deckCards = deckCards.filter(c => !c.classList.contains('loading-card'));
+
+  const el = buildCard(data);
+  el.style.zIndex = 10;
+  deck.appendChild(el);
+  deckCards.push(el);
+  rebuildStack();
+  initSwipe(el);
+  updateCounter();
+  checkRefill();
+}
+
+function pushNextCard() {
+  if (buffer.length > 0) {
+    const data = buffer.shift();
+    const el = buildCard(data);
+    el.style.zIndex = 10;
+    const deck = document.getElementById('deck');
+    deck.appendChild(el);
+    deckCards.push(el);
+    rebuildStack();
+    initSwipe(el);
+    updateCounter();
+    checkRefill();
+  } else {
+    // Buffer empty — show loading card and wait
+    waitingForCard = true;
+    const {t, g} = {
+      t: [...activeThemes][Math.floor(Math.random() * activeThemes.size)],
+      g: [...activeGeo][Math.floor(Math.random() * activeGeo.size)]
+    };
+    const loadingEl = buildLoadingCard(t, g);
+    loadingEl.style.zIndex = 10;
+    const deck = document.getElementById('deck');
+    deck.appendChild(loadingEl);
+    deckCards.push(loadingEl);
+    rebuildStack();
+    updateCounter();
+    if (fetchesInFlight === 0) fillBuffer();
+  }
 }
 
 function buildLoadingCard(theme, geo) {
@@ -229,7 +341,7 @@ function buildLoadingCard(theme, geo) {
       '<div class="shimmer-line med"></div>' +
       '<div class="shimmer-line short"></div>' +
     '</div>' +
-    '<div class="loading-label">Recherche en cours…</div>';
+    '<div class="loading-label">Chargement de l'actu…</div>';
   return el;
 }
 
@@ -251,90 +363,6 @@ function buildCard(data) {
     '<div class="card-body">' + (data.body || '') + '</div>' +
     (data.source ? '<div class="source-badge"><div class="source-dot"></div>Source : ' + data.source + '</div>' : '');
   return el;
-}
-
-function getEffectiveThemeGeo() {
-  const t = activeThemes.size > 0 ? [...activeThemes][Math.floor(Math.random() * activeThemes.size)] : 'politique';
-  const g = activeGeo.size > 0 ? [...activeGeo][Math.floor(Math.random() * activeGeo.size)] : 'fr';
-  return {t, g};
-}
-
-async function prefetchNextCard() {
-  if (isFetching || pendingCard) return;
-  isFetching = true;
-  const {t, g} = getEffectiveThemeGeo();
-  try {
-    const data = await fetchNewsCard(t, g);
-    pendingCard = data;
-  } catch(e) {
-    pendingCard = null;
-  }
-  isFetching = false;
-}
-
-function updateCounter() {
-  document.getElementById('counter').textContent = 'Carte ' + (seenCount + 1) + ' · actualités en direct';
-  const pct = Math.min(seenCount / Math.max(totalGenerated, 1) * 100, 95);
-  document.getElementById('progress').style.width = pct + '%';
-}
-
-let deckCards = [];
-
-async function pushNewCard(animated) {
-  const deck = document.getElementById('deck');
-
-  let cardData = null;
-  let loadingEl = null;
-
-  if (pendingCard) {
-    cardData = pendingCard;
-    pendingCard = null;
-  } else {
-    const {t, g} = getEffectiveThemeGeo();
-    loadingEl = buildLoadingCard(t, g);
-    loadingEl.style.zIndex = 10;
-
-    if (deckCards.length > 0) deckCards[deckCards.length-1].classList.add('behind1');
-    if (deckCards.length > 1) deckCards[deckCards.length-2].classList.add('behind2');
-
-    deck.appendChild(loadingEl);
-    updateCounter();
-
-    try {
-      cardData = await fetchNewsCard(t, g);
-    } catch(e) {
-      if (loadingEl && loadingEl.parentNode) loadingEl.remove();
-      showToast('Erreur réseau, réessai…');
-      setTimeout(() => pushNewCard(false), 1500);
-      return;
-    }
-    if (loadingEl && loadingEl.parentNode) loadingEl.remove();
-  }
-
-  const el = buildCard(cardData);
-  el.style.zIndex = 10;
-  totalGenerated++;
-
-  if (animated) {
-    el.style.transform = 'translateX(110%) rotate(12deg)';
-    el.style.opacity = '0';
-    deck.appendChild(el);
-    deckCards.push(el);
-    requestAnimationFrame(() => {
-      el.style.transition = 'transform .35s cubic-bezier(.4,0,.2,1), opacity .25s';
-      el.style.transform = '';
-      el.style.opacity = '1';
-      setTimeout(() => { el.style.transition = ''; }, 380);
-    });
-  } else {
-    deck.appendChild(el);
-    deckCards.push(el);
-  }
-
-  rebuildStack();
-  initSwipe(el);
-  updateCounter();
-  prefetchNextCard();
 }
 
 function rebuildStack() {
@@ -366,10 +394,14 @@ function dismissTop(dir) {
     rebuildStack();
   }, 310);
 
-  pushNewCard(false);
+  pushNextCard();
+
+  // Refill when buffer drops to threshold (= 8th card swiped = 2 remaining → refill)
+  if (buffer.length <= REFILL_THRESHOLD) checkRefill();
 }
 
 function initSwipe(el) {
+  if (el.classList.contains('loading-card')) return;
   let sx, sy, dx = 0, dragging = false;
   const hl = el.querySelector('.hint-like');
   const hn = el.querySelector('.hint-nope');
@@ -440,8 +472,6 @@ function buildFilters() {
       if (activeThemes.has(key)) { if (activeThemes.size > 1) activeThemes.delete(key); }
       else activeThemes.add(key);
       buildFilters();
-      pendingCard = null;
-      prefetchNextCard();
     };
     wrap.appendChild(chip);
   });
@@ -450,15 +480,19 @@ function buildFilters() {
 document.getElementById('btn-skip').onclick = () => dismissTop('left');
 document.getElementById('btn-next').onclick = () => dismissTop('right');
 document.getElementById('btn-shuffle').onclick = () => {
-  pendingCard = null;
   showToast('Nouveau sujet…');
-  pushNewCard(true);
+  // Clear buffer and refill with new themes/geo
+  buffer = [];
+  fetchesInFlight = 0;
+  fillBuffer();
+  showToast('Nouvelles actus en chargement…');
 };
 
 buildFilters();
-pushNewCard(false);
-pushNewCard(false);
-prefetchNextCard();
+// Show first card immediately (loading shimmer while buffer fills)
+pushNextCard();
+// Fill the buffer — fetches run in background
+fillBuffer();
 </script>
 </body>
 </html>

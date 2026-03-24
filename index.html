@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Actu Swipe</title>
+<style>
+  :root {
+    --bg: #f0ede8;
+    --card-bg: #ffffff;
+    --text: #1a1a18;
+    --muted: #6b6a65;
+    --border: rgba(0,0,0,0.09);
+    --pol-bg:#EEEDFE;--pol-t:#3C3489;
+    --eco-bg:#E1F5EE;--eco-t:#085041;
+    --spo-bg:#FAEEDA;--spo-t:#633806;
+    --cin-bg:#FBEAF0;--cin-t:#72243E;
+    --cul-bg:#E6F1FB;--cul-t:#0C447C;
+    --tec-bg:#EAF3DE;--tec-t:#27500A;
+  }
+  @media(prefers-color-scheme:dark){
+    :root{
+      --bg:#18181a;--card-bg:#26262a;--text:#e8e6e0;--muted:#9c9a92;--border:rgba(255,255,255,0.09);
+      --pol-bg:#26215C;--pol-t:#CECBF6;
+      --eco-bg:#04342C;--eco-t:#9FE1CB;
+      --spo-bg:#412402;--spo-t:#FAC775;
+      --cin-bg:#4B1528;--cin-t:#F4C0D1;
+      --cul-bg:#042C53;--cul-t:#B5D4F4;
+      --tec-bg:#173404;--tec-t:#C0DD97;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden;}
+  .app{display:flex;flex-direction:column;min-height:100vh;max-width:430px;margin:0 auto;padding:0 0 20px;}
+
+  .header{padding:20px 20px 10px;}
+  .header-eyebrow{font-size:12px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:3px;}
+  .header-title{font-size:22px;font-weight:600;line-height:1.2;}
+
+  .filters{padding:10px 16px 12px;display:flex;gap:7px;overflow-x:auto;scrollbar-width:none;}
+  .filters::-webkit-scrollbar{display:none;}
+  .chip{flex-shrink:0;height:34px;padding:0 13px;border-radius:17px;border:1.5px solid transparent;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .15s,transform .1s;display:flex;align-items:center;gap:5px;white-space:nowrap;user-select:none;}
+  .chip:active{transform:scale(0.94);}
+  .chip.off{opacity:.38;}
+  .chip-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+
+  .progress-bar{height:3px;background:var(--border);border-radius:2px;margin:0 16px 6px;overflow:hidden;}
+  .progress-fill{height:100%;border-radius:2px;background:var(--text);transition:width .4s;}
+  .counter{text-align:center;font-size:12px;color:var(--muted);margin-bottom:10px;min-height:18px;}
+
+  .deck-area{padding:0 16px;}
+  .deck{position:relative;height:490px;}
+
+  .card{
+    position:absolute;inset:0;
+    background:var(--card-bg);
+    border-radius:22px;
+    border:0.5px solid var(--border);
+    padding:22px 20px 18px;
+    display:flex;flex-direction:column;gap:12px;
+    cursor:grab;will-change:transform,opacity;
+    user-select:none;
+  }
+  .card:active{cursor:grabbing;}
+  .card.behind1{transform:scale(0.95) translateY(13px);opacity:.65;pointer-events:none;}
+  .card.behind2{transform:scale(0.90) translateY(24px);opacity:.35;pointer-events:none;}
+  .card.loading-card{pointer-events:none;}
+
+  .card-meta{display:flex;align-items:center;justify-content:space-between;}
+  .card-pill{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:11px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
+  .card-geo{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);}
+  .geo-dot{width:8px;height:8px;border-radius:50%;}
+  .card-date{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;}
+  .card-title{font-size:18px;font-weight:600;line-height:1.3;color:var(--text);}
+  .card-body{font-size:13.5px;line-height:1.6;color:var(--muted);flex:1;overflow:hidden;}
+  .card-body strong{color:var(--text);font-weight:500;}
+  .card-source{font-size:11px;color:var(--muted);margin-top:4px;opacity:.7;}
+
+  .hint-like,.hint-nope{position:absolute;top:26px;font-size:13px;font-weight:700;letter-spacing:.08em;border:2.5px solid;padding:4px 10px;border-radius:6px;opacity:0;pointer-events:none;text-transform:uppercase;}
+  .hint-like{left:20px;color:#1D9E75;border-color:#1D9E75;transform:rotate(-10deg);}
+  .hint-nope{right:20px;color:#E24B4A;border-color:#E24B4A;transform:rotate(10deg);}
+
+  .loading-shimmer{flex:1;display:flex;flex-direction:column;gap:12px;justify-content:center;}
+  .shimmer-line{height:14px;border-radius:7px;background:var(--border);animation:shimmer 1.4s infinite;}
+  .shimmer-line.wide{width:100%;}
+  .shimmer-line.med{width:70%;}
+  .shimmer-line.short{width:45%;}
+  .shimmer-title{height:22px;border-radius:7px;background:var(--border);animation:shimmer 1.4s infinite .1s;width:90%;margin-bottom:4px;}
+  @keyframes shimmer{0%,100%{opacity:.4;}50%{opacity:.9;}}
+  .loading-label{font-size:12px;color:var(--muted);text-align:center;margin-top:8px;}
+
+  .actions{display:flex;align-items:center;justify-content:center;gap:18px;margin-top:18px;}
+  .action-btn{width:52px;height:52px;border-radius:50%;border:1.5px solid var(--border);background:var(--card-bg);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:20px;transition:transform .1s,background .15s;}
+  .action-btn:active{transform:scale(0.88);}
+  .action-btn.skip{border-color:#F09595;}
+  .action-btn.next{border-color:#9FE1CB;}
+
+  .toast{position:absolute;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;font-size:13px;padding:8px 16px;border-radius:20px;opacity:0;pointer-events:none;transition:opacity .3s;white-space:nowrap;}
+  .toast.show{opacity:1;}
+
+  .source-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--muted);margin-top:auto;padding-top:6px;border-top:0.5px solid var(--border);}
+  .source-dot{width:6px;height:6px;border-radius:50%;background:#1D9E75;flex-shrink:0;}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div class="header-eyebrow">Actualités en direct</div>
+    <div class="header-title">Actu Swipe</div>
+  </div>
+
+  <div class="filters" id="filters"></div>
+  <div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
+  <div class="counter" id="counter">Chargement…</div>
+
+  <div class="deck-area">
+    <div class="deck" id="deck"></div>
+    <div class="actions">
+      <div class="action-btn skip" id="btn-skip" title="Passer">&#x2715;</div>
+      <div class="action-btn" id="btn-shuffle" title="Nouveau sujet" style="font-size:17px">&#x21BA;</div>
+      <div class="action-btn next" id="btn-next" title="Lu">&#x2713;</div>
+    </div>
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<script>
+const THEMES = {
+  politique:{label:'Politique',bg:'var(--pol-bg)',text:'var(--pol-t)'},
+  economie: {label:'Économie', bg:'var(--eco-bg)',text:'var(--eco-t)'},
+  sport:    {label:'Sport',    bg:'var(--spo-bg)',text:'var(--spo-t)'},
+  cinema:   {label:'Cinéma',   bg:'var(--cin-bg)',text:'var(--cin-t)'},
+  culture:  {label:'Culture',  bg:'var(--cul-bg)',text:'var(--cul-t)'},
+  tech:     {label:'Tech',     bg:'var(--tec-bg)',text:'var(--tec-t)'},
+};
+
+const THEME_QUERIES = {
+  politique: ['actualité politique France 2025 2026','élections France 2026','géopolitique monde 2025 2026','gouvernement Lecornu actualité','présidentielle 2027 France'],
+  economie:  ['économie France 2025 2026','droits de douane Trump économie','croissance PIB France 2025','inflation France 2026','bourse marchés financiers mars 2026'],
+  sport:     ['sport actualité France mars 2026','JO hiver Milan Cortina 2026 résultats','football coupe du monde 2026 préparatifs','tennis actualité 2025 2026','athlétisme résultats 2025'],
+  cinema:    ['cinéma France actualité 2025 2026','Oscars 2026 résultats','festival Cannes 2025 palmarès','sorties films France 2026','César 2026 cérémonie'],
+  culture:   ['culture actualité France 2025 2026','exposition art Paris 2025 2026','littérature française 2025','musique actualité France 2026','patrimoine culture France'],
+  tech:      ['technologie IA actualité 2025 2026','Mistral AI France actualité','intelligence artificielle monde 2025','tech startup France 2026','cybersécurité actualité 2025'],
+};
+
+let activeThemes = new Set(Object.keys(THEMES));
+let activeGeo = new Set(['fr','world']);
+let cardQueue = [];
+let seenCount = 0;
+let totalGenerated = 0;
+let isFetching = false;
+let pendingCard = null;
+
+function randomTheme() {
+  const opts = [...activeThemes];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+function randomGeo() {
+  const opts = [...activeGeo];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+function randomQuery(theme) {
+  const qs = THEME_QUERIES[theme] || THEME_QUERIES.politique;
+  return qs[Math.floor(Math.random() * qs.length)];
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+async function fetchNewsCard(theme, geo) {
+  const query = randomQuery(theme);
+  const geoLabel = geo === 'fr' ? 'France' : 'monde';
+  const themeLabel = THEMES[theme].label;
+
+  const systemPrompt = `Tu es un journaliste expert. À partir des résultats de recherche web, génère UNE actualité récente (2025-2026) sous forme de carte JSON.
+Réponds UNIQUEMENT avec un objet JSON valide, sans markdown, sans backticks, sans texte avant ou après.
+Format exact :
+{"date":"[date précise]","title":"[titre court et percutant, max 10 mots]","body":"[résumé factuel 2-3 phrases, avec les noms propres en <strong>]","source":"[nom du média source]","geo":"${geo}","theme":"${theme}"}
+La carte doit couvrir l'actualité ${themeLabel} en ${geoLabel === 'France' ? 'France' : 'à l\'international'}.`;
+
+  const userPrompt = `Recherche : "${query}"\nGénère une carte d'actualité sur ce sujet pour ${geoLabel}.`;
+
+  const resp = await fetch('/api/messages', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      system: systemPrompt,
+      messages: [{role:'user',content:userPrompt}]
+    })
+  });
+
+  if (!resp.ok) throw new Error('API error ' + resp.status);
+  const data = await resp.json();
+
+  let jsonStr = '';
+  for (const block of data.content) {
+    if (block.type === 'text' && block.text) {
+      jsonStr = block.text.trim();
+      break;
+    }
+  }
+  if (!jsonStr) throw new Error('No text in response');
+
+  const clean = jsonStr.replace(/^```json?\s*/,'').replace(/```\s*$/,'').trim();
+  return JSON.parse(clean);
+}
+
+function buildLoadingCard(theme, geo) {
+  const th = THEMES[theme] || THEMES.politique;
+  const geoLabel = geo === 'fr' ? 'France' : 'Monde';
+  const geoDot = geo === 'fr' ? '#0033a0' : '#b5461b';
+  const el = document.createElement('div');
+  el.className = 'card loading-card';
+  el.innerHTML =
+    '<div class="card-meta">' +
+      '<div class="card-pill" style="background:' + th.bg + ';color:' + th.text + '">' + th.label + '</div>' +
+      '<div class="card-geo"><div class="geo-dot" style="background:' + geoDot + '"></div>' + geoLabel + '</div>' +
+    '</div>' +
+    '<div class="loading-shimmer">' +
+      '<div class="shimmer-title"></div>' +
+      '<div class="shimmer-line wide"></div>' +
+      '<div class="shimmer-line wide"></div>' +
+      '<div class="shimmer-line med"></div>' +
+      '<div class="shimmer-line short"></div>' +
+    '</div>' +
+    '<div class="loading-label">Recherche en cours…</div>';
+  return el;
+}
+
+function buildCard(data) {
+  const theme = data.theme || 'politique';
+  const geo = data.geo || 'fr';
+  const th = THEMES[theme] || THEMES.politique;
+  const geoLabel = geo === 'fr' ? 'France' : 'Monde';
+  const geoDot = geo === 'fr' ? '#0033a0' : '#b5461b';
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.innerHTML =
+    '<div class="card-meta">' +
+      '<div class="card-pill" style="background:' + th.bg + ';color:' + th.text + '">' + th.label + '</div>' +
+      '<div class="card-geo"><div class="geo-dot" style="background:' + geoDot + '"></div>' + geoLabel + '</div>' +
+    '</div>' +
+    '<div class="card-date">' + (data.date || '') + '</div>' +
+    '<div class="card-title">' + (data.title || '') + '</div>' +
+    '<div class="card-body">' + (data.body || '') + '</div>' +
+    (data.source ? '<div class="source-badge"><div class="source-dot"></div>Source : ' + data.source + '</div>' : '');
+  return el;
+}
+
+function getEffectiveThemeGeo() {
+  const t = activeThemes.size > 0 ? [...activeThemes][Math.floor(Math.random() * activeThemes.size)] : 'politique';
+  const g = activeGeo.size > 0 ? [...activeGeo][Math.floor(Math.random() * activeGeo.size)] : 'fr';
+  return {t, g};
+}
+
+async function prefetchNextCard() {
+  if (isFetching || pendingCard) return;
+  isFetching = true;
+  const {t, g} = getEffectiveThemeGeo();
+  try {
+    const data = await fetchNewsCard(t, g);
+    pendingCard = data;
+  } catch(e) {
+    pendingCard = null;
+  }
+  isFetching = false;
+}
+
+function updateCounter() {
+  document.getElementById('counter').textContent = 'Carte ' + (seenCount + 1) + ' · actualités en direct';
+  const pct = Math.min(seenCount / Math.max(totalGenerated, 1) * 100, 95);
+  document.getElementById('progress').style.width = pct + '%';
+}
+
+let deckCards = [];
+
+async function pushNewCard(animated) {
+  const deck = document.getElementById('deck');
+
+  let cardData = null;
+  let loadingEl = null;
+
+  if (pendingCard) {
+    cardData = pendingCard;
+    pendingCard = null;
+  } else {
+    const {t, g} = getEffectiveThemeGeo();
+    loadingEl = buildLoadingCard(t, g);
+    loadingEl.style.zIndex = 10;
+
+    if (deckCards.length > 0) deckCards[deckCards.length-1].classList.add('behind1');
+    if (deckCards.length > 1) deckCards[deckCards.length-2].classList.add('behind2');
+
+    deck.appendChild(loadingEl);
+    updateCounter();
+
+    try {
+      cardData = await fetchNewsCard(t, g);
+    } catch(e) {
+      if (loadingEl && loadingEl.parentNode) loadingEl.remove();
+      showToast('Erreur réseau, réessai…');
+      setTimeout(() => pushNewCard(false), 1500);
+      return;
+    }
+    if (loadingEl && loadingEl.parentNode) loadingEl.remove();
+  }
+
+  const el = buildCard(cardData);
+  el.style.zIndex = 10;
+  totalGenerated++;
+
+  if (animated) {
+    el.style.transform = 'translateX(110%) rotate(12deg)';
+    el.style.opacity = '0';
+    deck.appendChild(el);
+    deckCards.push(el);
+    requestAnimationFrame(() => {
+      el.style.transition = 'transform .35s cubic-bezier(.4,0,.2,1), opacity .25s';
+      el.style.transform = '';
+      el.style.opacity = '1';
+      setTimeout(() => { el.style.transition = ''; }, 380);
+    });
+  } else {
+    deck.appendChild(el);
+    deckCards.push(el);
+  }
+
+  rebuildStack();
+  initSwipe(el);
+  updateCounter();
+  prefetchNextCard();
+}
+
+function rebuildStack() {
+  const n = deckCards.length;
+  deckCards.forEach((c, i) => {
+    c.classList.remove('behind1','behind2');
+    const fromTop = n - 1 - i;
+    if (fromTop === 1) c.classList.add('behind1');
+    else if (fromTop >= 2) c.classList.add('behind2');
+  });
+}
+
+function dismissTop(dir) {
+  if (deckCards.length === 0) return;
+  const top = deckCards[deckCards.length - 1];
+  if (top.classList.contains('loading-card')) return;
+
+  const tx = dir === 'right' ? 150 : -150;
+  const rot = dir === 'right' ? 20 : -20;
+  top.style.transition = 'transform .32s cubic-bezier(.4,0,.2,1), opacity .28s';
+  top.style.transform = 'translateX(' + tx + '%) rotate(' + rot + 'deg)';
+  top.style.opacity = '0';
+
+  deckCards.pop();
+  seenCount++;
+
+  setTimeout(() => {
+    if (top.parentNode) top.remove();
+    rebuildStack();
+  }, 310);
+
+  pushNewCard(false);
+}
+
+function initSwipe(el) {
+  let sx, sy, dx = 0, dragging = false;
+  const hl = el.querySelector('.hint-like');
+  const hn = el.querySelector('.hint-nope');
+
+  function start(x, y) { sx = x; sy = y; dx = 0; dragging = true; el.style.transition = 'none'; }
+  function move(x, y) {
+    if (!dragging) return;
+    const ddx = x - sx, ddy = y - sy;
+    if (Math.abs(ddy) > Math.abs(ddx) + 12) { dragging = false; return; }
+    dx = ddx;
+    el.style.transform = 'translateX(' + dx + 'px) rotate(' + (dx * 0.055) + 'deg)';
+    const r = Math.min(Math.abs(dx) / 75, 1);
+    if (hl) hl.style.opacity = dx > 0 ? r : 0;
+    if (hn) hn.style.opacity = dx < 0 ? r : 0;
+  }
+  function end() {
+    if (!dragging) return;
+    dragging = false;
+    if (hl) hl.style.opacity = 0;
+    if (hn) hn.style.opacity = 0;
+    if (Math.abs(dx) > 75) { dismissTop(dx > 0 ? 'right' : 'left'); }
+    else {
+      el.style.transition = 'transform .28s cubic-bezier(.4,0,.2,1)';
+      el.style.transform = '';
+    }
+  }
+  el.addEventListener('mousedown', e => start(e.clientX, e.clientY));
+  window.addEventListener('mousemove', e => { if (dragging) move(e.clientX, e.clientY); });
+  window.addEventListener('mouseup', end);
+  el.addEventListener('touchstart', e => { const t = e.touches[0]; start(t.clientX, t.clientY); }, {passive:true});
+  el.addEventListener('touchmove', e => { const t = e.touches[0]; move(t.clientX, t.clientY); }, {passive:true});
+  el.addEventListener('touchend', end);
+}
+
+function buildFilters() {
+  const wrap = document.getElementById('filters');
+  wrap.innerHTML = '';
+
+  ['fr','world'].forEach(geo => {
+    const on = activeGeo.has(geo);
+    const label = geo === 'fr' ? 'France' : 'Monde';
+    const dot = geo === 'fr' ? '#0033a0' : '#b5461b';
+    const bgOn = geo === 'fr' ? '#dce6fb' : '#fbe8e1';
+    const txOn = geo === 'fr' ? '#0033a0' : '#8c3210';
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (on ? '' : ' off');
+    chip.style.cssText = on
+      ? 'background:' + bgOn + ';color:' + txOn + ';border-color:' + bgOn
+      : 'background:transparent;color:var(--muted);border-color:var(--border)';
+    chip.innerHTML = '<span class="chip-dot" style="background:' + dot + '"></span>' + label;
+    chip.onclick = () => {
+      if (activeGeo.has(geo)) { if (activeGeo.size > 1) activeGeo.delete(geo); }
+      else activeGeo.add(geo);
+      buildFilters();
+    };
+    wrap.appendChild(chip);
+  });
+
+  Object.entries(THEMES).forEach(([key, th]) => {
+    const on = activeThemes.has(key);
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (on ? '' : ' off');
+    chip.style.cssText = on
+      ? 'background:' + th.bg + ';color:' + th.text + ';border-color:' + th.bg
+      : 'background:transparent;color:var(--muted);border-color:var(--border)';
+    chip.textContent = th.label;
+    chip.onclick = () => {
+      if (activeThemes.has(key)) { if (activeThemes.size > 1) activeThemes.delete(key); }
+      else activeThemes.add(key);
+      buildFilters();
+      pendingCard = null;
+      prefetchNextCard();
+    };
+    wrap.appendChild(chip);
+  });
+}
+
+document.getElementById('btn-skip').onclick = () => dismissTop('left');
+document.getElementById('btn-next').onclick = () => dismissTop('right');
+document.getElementById('btn-shuffle').onclick = () => {
+  pendingCard = null;
+  showToast('Nouveau sujet…');
+  pushNewCard(true);
+};
+
+buildFilters();
+pushNewCard(false);
+pushNewCard(false);
+prefetchNextCard();
+</script>
+</body>
+</html>
